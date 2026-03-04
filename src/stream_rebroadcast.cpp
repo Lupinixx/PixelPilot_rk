@@ -3,6 +3,8 @@
 #include <stdint.h>
 #include <string.h>
 #include <unistd.h>
+#include <time.h>
+#include <chrono>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -29,7 +31,9 @@ StreamRebroadcast::StreamRebroadcast(rebroadcast_params params) {
     sock_fd_ = -1;
     rtp_seq_ = 0;
     rtp_timestamp_ = 0;
-    rtp_ssrc_ = 0x12345678;
+    // Generate a random SSRC to avoid collisions with other streams
+    srand(time(NULL) ^ getpid());
+    rtp_ssrc_ = (uint32_t)rand();
     running_ = false;
 }
 
@@ -139,7 +143,7 @@ void StreamRebroadcast::send_rtp_packet(const uint8_t *data, size_t size) {
         size_t start = pos;
         bool found = false;
         while (pos + 3 <= size) {
-            if (pos + 3 < size && data[pos] == 0 && data[pos+1] == 0 && data[pos+2] == 0 && data[pos+3] == 1) {
+            if (pos + 4 <= size && data[pos] == 0 && data[pos+1] == 0 && data[pos+2] == 0 && data[pos+3] == 1) {
                 if (start != pos && !nals.empty()) {
                     nals.back().second = pos - nals.back().first;
                 }
@@ -181,7 +185,7 @@ void StreamRebroadcast::send_rtp_packet(const uint8_t *data, size_t size) {
             uint8_t packet[RTP_HEADER_SIZE + MAX_RTP_PAYLOAD];
             // RTP Header
             packet[0] = 0x80; // V=2, P=0, X=0, CC=0
-            packet[1] = (codec_ == VideoCodec::H264 ? 96 : 96) | 0x80; // PT=96, M=1 (marker)
+            packet[1] = 96 | 0x80; // PT=96 (dynamic), M=1 (marker)
             packet[2] = (rtp_seq_ >> 8) & 0xFF;
             packet[3] = rtp_seq_ & 0xFF;
             uint32_t ts = rtp_timestamp_;
@@ -293,8 +297,11 @@ void StreamRebroadcast::send_rtp_packet(const uint8_t *data, size_t size) {
         }
     }
 
-    // Increment timestamp (assume 90kHz clock, ~33ms per frame at 30fps)
-    rtp_timestamp_ += 3000;
+    // Use wall-clock timing for RTP timestamps (90kHz clock)
+    auto now = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+        now.time_since_epoch()).count();
+    rtp_timestamp_ = (uint32_t)((elapsed * 90) / 1000); // 90kHz clock
 }
 
 void StreamRebroadcast::loop() {
