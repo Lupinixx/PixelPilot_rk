@@ -12,6 +12,7 @@
 #include <atomic>
 #include <memory>
 #include <vector>
+#include <string>
 #include <netinet/in.h>
 
 #include "gstrtpreceiver.h"
@@ -53,6 +54,7 @@ private:
     int open_socket();
     void close_socket();
     void send_rtp_packet(const uint8_t *data, size_t size);
+    void write_sdp_file();
 
     std::queue<rebroadcast_rpc> queue_;
     std::mutex mtx_;
@@ -67,6 +69,7 @@ private:
     uint32_t rtp_timestamp_;
     uint32_t rtp_ssrc_;
     bool running_;
+    std::string sdp_path_;
 };
 #else
 typedef struct StreamRebroadcast StreamRebroadcast;

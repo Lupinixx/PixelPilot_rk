@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <time.h>
 #include <chrono>
+#include <fstream>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -117,6 +118,7 @@ int StreamRebroadcast::open_socket() {
     dest_addr_.sin_addr.s_addr = inet_addr(host_);
 
     spdlog::info("Rebroadcast: streaming to {}:{}", host_, port_);
+    write_sdp_file();
     return 0;
 }
 
@@ -125,6 +127,41 @@ void StreamRebroadcast::close_socket() {
         close(sock_fd_);
         sock_fd_ = -1;
     }
+}
+
+void StreamRebroadcast::write_sdp_file() {
+    sdp_path_ = "/tmp/pixelpilot_rebroadcast.sdp";
+    const char *codec_name = (codec_ == VideoCodec::H264) ? "H264" : "H265";
+
+    std::ofstream sdp(sdp_path_);
+    if (!sdp.is_open()) {
+        spdlog::warn("Rebroadcast: could not write SDP file to {}", sdp_path_);
+        return;
+    }
+
+    sdp << "v=0\r\n";
+    sdp << "o=- 0 0 IN IP4 0.0.0.0\r\n";
+    sdp << "s=PixelPilot FPV Stream\r\n";
+
+    // Connection line: multicast addresses get a TTL, unicast/broadcast don't
+    uint32_t addr = ntohl(inet_addr(host_));
+    if ((addr & 0xF0000000) == 0xE0000000) {
+        sdp << "c=IN IP4 " << host_ << "/2\r\n";
+    } else {
+        sdp << "c=IN IP4 " << host_ << "\r\n";
+    }
+
+    sdp << "t=0 0\r\n";
+    sdp << "m=video " << port_ << " RTP/AVP 96\r\n";
+    sdp << "a=rtpmap:96 " << codec_name << "/90000\r\n";
+
+    if (codec_ == VideoCodec::H264) {
+        sdp << "a=fmtp:96 packetization-mode=1\r\n";
+    }
+
+    sdp.close();
+    spdlog::info("Rebroadcast: SDP file written to {}", sdp_path_);
+    spdlog::info("Rebroadcast: open in VLC with: vlc {}", sdp_path_);
 }
 
 // Build and send an RTP packet with H264/H265 NAL unit payload.
@@ -175,9 +212,10 @@ void StreamRebroadcast::send_rtp_packet(const uint8_t *data, size_t size) {
         nals.push_back({0, size});
     }
 
-    for (auto& nal : nals) {
-        const uint8_t *nal_data = data + nal.first;
-        size_t nal_size = nal.second;
+    for (size_t nal_idx = 0; nal_idx < nals.size(); nal_idx++) {
+        const uint8_t *nal_data = data + nals[nal_idx].first;
+        size_t nal_size = nals[nal_idx].second;
+        bool is_last_nal = (nal_idx == nals.size() - 1);
         if (nal_size == 0) continue;
 
         if (nal_size <= MAX_RTP_PAYLOAD) {
@@ -185,7 +223,7 @@ void StreamRebroadcast::send_rtp_packet(const uint8_t *data, size_t size) {
             uint8_t packet[RTP_HEADER_SIZE + MAX_RTP_PAYLOAD];
             // RTP Header
             packet[0] = 0x80; // V=2, P=0, X=0, CC=0
-            packet[1] = 96 | 0x80; // PT=96 (dynamic), M=1 (marker)
+            packet[1] = 96 | (is_last_nal ? 0x80 : 0x00); // PT=96 (dynamic), M=1 only on last NAL of frame
             packet[2] = (rtp_seq_ >> 8) & 0xFF;
             packet[3] = rtp_seq_ & 0xFF;
             uint32_t ts = rtp_timestamp_;
@@ -215,10 +253,11 @@ void StreamRebroadcast::send_rtp_packet(const uint8_t *data, size_t size) {
                 while (offset < nal_size) {
                     size_t chunk = std::min((size_t)MAX_RTP_PAYLOAD - 2, nal_size - offset);
                     bool last = (offset + chunk >= nal_size);
+                    bool marker = last && is_last_nal;
 
                     uint8_t packet[RTP_HEADER_SIZE + MAX_RTP_PAYLOAD];
                     packet[0] = 0x80;
-                    packet[1] = 96 | (last ? 0x80 : 0x00); // marker on last
+                    packet[1] = 96 | (marker ? 0x80 : 0x00); // marker only on last fragment of last NAL
                     packet[2] = (rtp_seq_ >> 8) & 0xFF;
                     packet[3] = rtp_seq_ & 0xFF;
                     uint32_t ts = rtp_timestamp_;
@@ -259,10 +298,11 @@ void StreamRebroadcast::send_rtp_packet(const uint8_t *data, size_t size) {
                 while (offset < nal_size) {
                     size_t chunk = std::min((size_t)MAX_RTP_PAYLOAD - 3, nal_size - offset);
                     bool last = (offset + chunk >= nal_size);
+                    bool marker = last && is_last_nal;
 
                     uint8_t packet[RTP_HEADER_SIZE + MAX_RTP_PAYLOAD];
                     packet[0] = 0x80;
-                    packet[1] = 96 | (last ? 0x80 : 0x00);
+                    packet[1] = 96 | (marker ? 0x80 : 0x00);
                     packet[2] = (rtp_seq_ >> 8) & 0xFF;
                     packet[3] = rtp_seq_ & 0xFF;
                     uint32_t ts = rtp_timestamp_;
