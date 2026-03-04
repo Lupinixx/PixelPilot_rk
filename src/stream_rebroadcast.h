@@ -13,6 +13,7 @@
 #include <memory>
 #include <vector>
 #include <string>
+#include <chrono>
 #include <netinet/in.h>
 
 #include "gstrtpreceiver.h"
@@ -54,7 +55,10 @@ private:
     int open_socket();
     void close_socket();
     void send_rtp_packet(const uint8_t *data, size_t size);
-    void write_sdp_file();
+    std::string generate_sdp();
+    int open_sap_socket();
+    void close_sap_socket();
+    void send_sap_announcement(bool deletion);
 
     std::queue<rebroadcast_rpc> queue_;
     std::mutex mtx_;
@@ -69,7 +73,14 @@ private:
     uint32_t rtp_timestamp_;
     uint32_t rtp_ssrc_;
     bool running_;
-    std::string sdp_path_;
+
+    // SAP announcement state
+    int sap_fd_;
+    struct sockaddr_in sap_addr_;
+    uint16_t sap_msg_id_;
+    uint32_t local_ip_;
+    std::string sdp_;
+    std::chrono::steady_clock::time_point last_sap_time_;
 };
 #else
 typedef struct StreamRebroadcast StreamRebroadcast;

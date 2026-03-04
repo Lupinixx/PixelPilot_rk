@@ -5,7 +5,6 @@
 #include <unistd.h>
 #include <time.h>
 #include <chrono>
-#include <fstream>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -24,12 +23,17 @@ std::atomic<int> rebroadcast_enabled{0};
 static const int RTP_HEADER_SIZE = 12;
 // Max UDP payload to avoid fragmentation
 static const int MAX_RTP_PAYLOAD = 1400;
+// SAP announcement interval in seconds
+static const int SAP_INTERVAL_SEC = 5;
 
 StreamRebroadcast::StreamRebroadcast(rebroadcast_params params) {
     host_ = params.host;
     port_ = params.port;
     codec_ = params.codec;
     sock_fd_ = -1;
+    sap_fd_ = -1;
+    local_ip_ = 0;
+    sap_msg_id_ = 0;
     rtp_seq_ = 0;
     rtp_timestamp_ = 0;
     // Generate a random SSRC to avoid collisions with other streams
@@ -41,6 +45,9 @@ StreamRebroadcast::StreamRebroadcast(rebroadcast_params params) {
 StreamRebroadcast::~StreamRebroadcast() {
     if (sock_fd_ >= 0) {
         close_socket();
+    }
+    if (sap_fd_ >= 0) {
+        close_sap_socket();
     }
 }
 
@@ -118,7 +125,6 @@ int StreamRebroadcast::open_socket() {
     dest_addr_.sin_addr.s_addr = inet_addr(host_);
 
     spdlog::info("Rebroadcast: streaming to {}:{}", host_, port_);
-    write_sdp_file();
     return 0;
 }
 
@@ -129,39 +135,108 @@ void StreamRebroadcast::close_socket() {
     }
 }
 
-void StreamRebroadcast::write_sdp_file() {
-    sdp_path_ = "/tmp/pixelpilot_rebroadcast.sdp";
+std::string StreamRebroadcast::generate_sdp() {
     const char *codec_name = (codec_ == VideoCodec::H264) ? "H264" : "H265";
+    char lip[INET_ADDRSTRLEN];
+    struct in_addr a;
+    a.s_addr = local_ip_;
+    inet_ntop(AF_INET, &a, lip, sizeof(lip));
 
-    std::ofstream sdp(sdp_path_);
-    if (!sdp.is_open()) {
-        spdlog::warn("Rebroadcast: could not write SDP file to {}", sdp_path_);
-        return;
-    }
-
-    sdp << "v=0\r\n";
-    sdp << "o=- 0 0 IN IP4 0.0.0.0\r\n";
-    sdp << "s=PixelPilot FPV Stream\r\n";
-
-    // Connection line: multicast addresses get a TTL, unicast/broadcast don't
+    // Detect if destination is multicast
     uint32_t addr = ntohl(inet_addr(host_));
-    if ((addr & 0xF0000000) == 0xE0000000) {
-        sdp << "c=IN IP4 " << host_ << "/2\r\n";
+    bool is_multicast = ((addr & 0xF0000000) == 0xE0000000);
+
+    char sdp[512];
+    if (is_multicast) {
+        snprintf(sdp, sizeof(sdp),
+            "v=0\r\n"
+            "o=- %u 1 IN IP4 %s\r\n"
+            "s=PixelPilot FPV Stream\r\n"
+            "c=IN IP4 %s/2\r\n"
+            "t=0 0\r\n"
+            "m=video %d RTP/AVP 96\r\n"
+            "a=rtpmap:96 %s/90000\r\n",
+            rtp_ssrc_, lip, host_, port_, codec_name);
     } else {
-        sdp << "c=IN IP4 " << host_ << "\r\n";
+        snprintf(sdp, sizeof(sdp),
+            "v=0\r\n"
+            "o=- %u 1 IN IP4 %s\r\n"
+            "s=PixelPilot FPV Stream\r\n"
+            "c=IN IP4 %s\r\n"
+            "t=0 0\r\n"
+            "m=video %d RTP/AVP 96\r\n"
+            "a=rtpmap:96 %s/90000\r\n",
+            rtp_ssrc_, lip, host_, port_, codec_name);
+    }
+    return std::string(sdp);
+}
+
+int StreamRebroadcast::open_sap_socket() {
+    sap_fd_ = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sap_fd_ < 0) {
+        spdlog::warn("Rebroadcast: failed to create SAP socket");
+        return -1;
     }
 
-    sdp << "t=0 0\r\n";
-    sdp << "m=video " << port_ << " RTP/AVP 96\r\n";
-    sdp << "a=rtpmap:96 " << codec_name << "/90000\r\n";
+    int ttl = 4;
+    setsockopt(sap_fd_, IPPROTO_IP, IP_MULTICAST_TTL, &ttl, sizeof(ttl));
 
-    if (codec_ == VideoCodec::H264) {
-        sdp << "a=fmtp:96 packetization-mode=1\r\n";
+    memset(&sap_addr_, 0, sizeof(sap_addr_));
+    sap_addr_.sin_family = AF_INET;
+    sap_addr_.sin_port = htons(9875);
+    sap_addr_.sin_addr.s_addr = inet_addr("224.2.127.254");
+
+    sap_msg_id_ = (uint16_t)(rtp_ssrc_ & 0xFFFF);
+
+    // Determine local IP by connecting a temporary UDP socket toward the destination
+    int temp_fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (temp_fd >= 0) {
+        struct sockaddr_in tmp;
+        memset(&tmp, 0, sizeof(tmp));
+        tmp.sin_family = AF_INET;
+        tmp.sin_addr.s_addr = inet_addr(host_);
+        tmp.sin_port = htons(port_);
+        connect(temp_fd, (struct sockaddr *)&tmp, sizeof(tmp));
+        struct sockaddr_in local;
+        socklen_t local_len = sizeof(local);
+        getsockname(temp_fd, (struct sockaddr *)&local, &local_len);
+        local_ip_ = local.sin_addr.s_addr; // network byte order
+        close(temp_fd);
     }
 
-    sdp.close();
-    spdlog::info("Rebroadcast: SDP file written to {}", sdp_path_);
-    spdlog::info("Rebroadcast: open in VLC with: vlc {}", sdp_path_);
+    spdlog::info("Rebroadcast: SAP announcements on 224.2.127.254:9875");
+    return 0;
+}
+
+void StreamRebroadcast::close_sap_socket() {
+    if (sap_fd_ >= 0) {
+        close(sap_fd_);
+        sap_fd_ = -1;
+    }
+}
+
+void StreamRebroadcast::send_sap_announcement(bool deletion) {
+    if (sap_fd_ < 0 || sdp_.empty()) return;
+
+    // SAP header (RFC 2974): 8 bytes for IPv4
+    uint8_t sap_header[8];
+    sap_header[0] = 0x20 | (deletion ? 0x04 : 0x00); // V=1, T=deletion?
+    sap_header[1] = 0;    // auth len = 0
+    sap_header[2] = (sap_msg_id_ >> 8) & 0xFF;
+    sap_header[3] = sap_msg_id_ & 0xFF;
+    memcpy(&sap_header[4], &local_ip_, 4); // originating source
+
+    // Payload: "application/sdp\0" + SDP content
+    const char *mime = "application/sdp";
+    size_t mime_len = strlen(mime) + 1; // include null terminator
+    size_t total = 8 + mime_len + sdp_.size();
+    std::vector<uint8_t> packet(total);
+    memcpy(packet.data(), sap_header, 8);
+    memcpy(packet.data() + 8, mime, mime_len);
+    memcpy(packet.data() + 8 + mime_len, sdp_.data(), sdp_.size());
+
+    sendto(sap_fd_, packet.data(), total, 0,
+           (struct sockaddr *)&sap_addr_, sizeof(sap_addr_));
 }
 
 // Build and send an RTP packet with H264/H265 NAL unit payload.
@@ -363,6 +438,10 @@ void StreamRebroadcast::loop() {
                 if (open_socket() == 0) {
                     running_ = true;
                     rebroadcast_enabled.store(1);
+                    open_sap_socket();
+                    sdp_ = generate_sdp();
+                    send_sap_announcement(false);
+                    last_sap_time_ = std::chrono::steady_clock::now();
                     osd_publish_bool_fact("rebroadcast.enabled", NULL, 0, true);
                     spdlog::info("Rebroadcast: started");
                 }
@@ -372,6 +451,8 @@ void StreamRebroadcast::loop() {
             {
                 SPDLOG_DEBUG("Rebroadcast: got RPC STOP");
                 if (!running_) break;
+                send_sap_announcement(true);
+                close_sap_socket();
                 close_socket();
                 running_ = false;
                 rebroadcast_enabled.store(0);
@@ -386,10 +467,16 @@ void StreamRebroadcast::loop() {
                     if (open_socket() == 0) {
                         running_ = true;
                         rebroadcast_enabled.store(1);
+                        open_sap_socket();
+                        sdp_ = generate_sdp();
+                        send_sap_announcement(false);
+                        last_sap_time_ = std::chrono::steady_clock::now();
                         osd_publish_bool_fact("rebroadcast.enabled", NULL, 0, true);
                         spdlog::info("Rebroadcast: started");
                     }
                 } else {
+                    send_sap_announcement(true);
+                    close_sap_socket();
                     close_socket();
                     running_ = false;
                     rebroadcast_enabled.store(0);
@@ -403,6 +490,12 @@ void StreamRebroadcast::loop() {
                 if (!running_) break;
                 std::shared_ptr<std::vector<uint8_t>> frame = rpc.frame;
                 send_rtp_packet(frame->data(), frame->size());
+                // Periodically send SAP announcements
+                auto now = std::chrono::steady_clock::now();
+                if (std::chrono::duration_cast<std::chrono::seconds>(now - last_sap_time_).count() >= SAP_INTERVAL_SEC) {
+                    send_sap_announcement(false);
+                    last_sap_time_ = now;
+                }
                 break;
             }
         case rebroadcast_rpc::RPC_SHUTDOWN:
@@ -411,6 +504,8 @@ void StreamRebroadcast::loop() {
     }
 end:
     if (running_) {
+        send_sap_announcement(true);
+        close_sap_socket();
         close_socket();
         running_ = false;
         rebroadcast_enabled.store(0);

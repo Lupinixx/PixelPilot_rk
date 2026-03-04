@@ -86,9 +86,8 @@ void create_gs_spectator_menu(lv_obj_t * parent) {
         "Rebroadcasts the FPV stream over\n"
         "WiFi (UDP/RTP) for a spectator\n"
         "view on a phone.\n\n"
-        "On Android, use a player like\n"
-        "VLC or FPV_VR_OS and connect to\n"
-        "the RTP stream on port 5700.");
+        "VLC: The stream auto-appears in\n"
+        "Local Network > SAP.");
     lv_obj_add_style(info_label, &style_openipc_section, LV_PART_MAIN);
     lv_obj_set_width(info_label, LV_PCT(100));
 
