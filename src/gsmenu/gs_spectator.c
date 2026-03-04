@@ -68,8 +68,8 @@ void create_gs_spectator_menu(lv_obj_t * parent) {
     lv_obj_t * cont = lv_menu_cont_create(section);
     lv_obj_set_flex_flow(cont, LV_FLEX_FLOW_COLUMN);
 
-    /* Toggle switch */
-    spectator_switch = create_switch(cont, LV_SYMBOL_WIFI, "Spectator Stream", NULL, menu_page_data, false);
+    /* Toggle switch - pass NULL for menu_page_data and parameter since we use our own event handler */
+    spectator_switch = create_switch(cont, LV_SYMBOL_WIFI, "Spectator Stream", NULL, NULL, false);
     lv_obj_t * sw = lv_obj_get_child_by_type(spectator_switch, 0, &lv_switch_class);
     if (sw) {
         lv_obj_add_event_cb(sw, spectator_toggle_event_handler, LV_EVENT_VALUE_CHANGED, NULL);
