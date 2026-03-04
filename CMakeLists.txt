@@ -130,6 +130,8 @@ set(LIB_SOURCE_FILES
         src/gsmenu/air_aalink.c
         src/gsmenu/gs_actions.h
         src/gsmenu/gs_actions.c
+        src/gsmenu/gs_spectator.h
+        src/gsmenu/gs_spectator.c
         src/gsmenu/gs_connection_checker.h
         src/gsmenu/gs_connection_checker.c
         src/gsmenu/styles.h
@@ -156,7 +158,9 @@ set(LIB_SOURCE_FILES
         src/WiFiRSSIMonitor.cpp
         src/scheduling_helper.hpp
         src/gstrtpreceiver.cpp
-        src/gstrtpreceiver.h)
+        src/gstrtpreceiver.h
+        src/stream_rebroadcast.h
+        src/stream_rebroadcast.cpp)
 set(SOURCE_FILES
   ${LIB_SOURCE_FILES}
   src/main.cpp

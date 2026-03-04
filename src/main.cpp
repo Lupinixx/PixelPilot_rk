@@ -49,6 +49,7 @@ extern "C" {
 #include "osd.hpp"
 #include "wfbcli.hpp"
 #include "dvr.h"
+#include "stream_rebroadcast.h"
 #include "gstrtpreceiver.h"
 #include "scheduling_helper.hpp"
 #include "time_util.h"
@@ -108,6 +109,7 @@ uint16_t listen_port = 5600;
 const char* unix_socket = NULL;
 char* dvr_template = NULL;
 Dvr *dvr = NULL;
+StreamRebroadcast *rebroadcaster = NULL;
 OsSensors os_sensors; // TODO: pass as argument to `main_loop`
 MenuAction airactions[MAX_ACTIONS];
 size_t airactions_count;
@@ -395,6 +397,9 @@ void sig_handler(int signum)
 	if (dvr != NULL) {
 		dvr->shutdown();
 	}
+	if (rebroadcaster != NULL) {
+		rebroadcaster->shutdown();
+	}
 	return_value = signum;
 }
 
@@ -609,6 +614,9 @@ void read_gstreamerpipe_stream(MppPacket *packet, int gst_udp_port, const char *
         if (dvr_enabled && dvr != NULL) {
 			dvr->frame(frame);
         }
+        if (rebroadcast_enabled.load() && rebroadcaster != NULL) {
+            rebroadcaster->frame(frame);
+        }
     };
     receiver->start_receiving(cb);
     main_loop();
@@ -731,6 +739,12 @@ void printHelp() {
     "\n"
     "    --wfb-api-host         - Host or IP of wfb-server for cli statistics. (Default: 127.0.0.1)\n"
     "\n"
+    "    --rebroadcast          - Enable FPV stream rebroadcast over WiFi (UDP/RTP)\n"
+    "\n"
+    "    --rebroadcast-host <h> - Destination IP for rebroadcast              (Default: 224.0.0.1)\n"
+    "\n"
+    "    --rebroadcast-port <p> - Destination UDP port for rebroadcast        (Default: 5700)\n"
+    "\n"
     "    --version              - Show program version\n"
     "\n", APP_VERSION_MAJOR, APP_VERSION_MINOR
   );
@@ -751,6 +765,9 @@ int main(int argc, char **argv)
 	int mp4_fragmentation_mode = 0;
 	uint16_t wfb_port = 8003;
 	const char *wfb_api_host = "127.0.0.1";
+	bool rebroadcast_autostart = false;
+	const char *rebroadcast_host = "224.0.0.1";
+	int rebroadcast_port = 5700;
 	uint16_t mode_width = 0;
 	uint16_t mode_height = 0;
 	uint32_t mode_vrefresh = 0;
@@ -940,6 +957,21 @@ int main(int argc, char **argv)
     	continue;
 	}
 
+	__OnArgument("--rebroadcast") {
+		rebroadcast_autostart = true;
+		continue;
+	}
+
+	__OnArgument("--rebroadcast-host") {
+		rebroadcast_host = __ArgValue;
+		continue;
+	}
+
+	__OnArgument("--rebroadcast-port") {
+		rebroadcast_port = atoi(__ArgValue);
+		continue;
+	}
+
 	__EndParseConsoleArguments__
 
 	spdlog::set_level(log_level);
@@ -1126,7 +1158,7 @@ int main(int argc, char **argv)
 	ret = pthread_cond_init(&video_cond, NULL);
 	assert(!ret);
 
-	pthread_t tid_frame, tid_display, tid_osd, tid_mavlink, tid_dvr, tid_wfbcli;
+	pthread_t tid_frame, tid_display, tid_osd, tid_mavlink, tid_dvr, tid_wfbcli, tid_rebroadcast;
 	if (dvr_template != NULL) {
 		dvr_thread_params args;
 		args.filename_template = dvr_template;
@@ -1140,6 +1172,18 @@ int main(int argc, char **argv)
 		ret = pthread_create(&tid_dvr, NULL, &Dvr::__THREAD__, dvr);
 		if (dvr_autostart) {
 			dvr->start_recording();
+		}
+	}
+	{
+		rebroadcast_params rb_args;
+		rb_args.host = rebroadcast_host;
+		rb_args.port = rebroadcast_port;
+		rb_args.codec = codec;
+		rebroadcaster = new StreamRebroadcast(rb_args);
+		ret = pthread_create(&tid_rebroadcast, NULL, &StreamRebroadcast::__THREAD__, rebroadcaster);
+		assert(!ret);
+		if (rebroadcast_autostart) {
+			rebroadcaster->start();
 		}
 	}
 	ret = pthread_create(&tid_frame, NULL, __FRAME_THREAD__, NULL);
@@ -1212,6 +1256,13 @@ int main(int argc, char **argv)
 	if (dvr_template != NULL ){
 		ret = pthread_join(tid_dvr, NULL);
 		assert(!ret);
+	}
+	if (rebroadcaster != NULL) {
+		rebroadcaster->shutdown();
+		ret = pthread_join(tid_rebroadcast, NULL);
+		assert(!ret);
+		delete rebroadcaster;
+		rebroadcaster = NULL;
 	}
 
 	ret = mpi.mpi->reset(mpi.ctx);
