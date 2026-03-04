@@ -267,7 +267,11 @@ void StreamRebroadcast::send_sap_announcement(bool deletion) {
 // Send a single (small) NAL unit as one RTP packet.
 void StreamRebroadcast::send_single_nal_rtp(const uint8_t *nal_data,
                                             size_t nal_size, bool marker) {
-    if (sock_fd_ < 0 || nal_size == 0 || nal_size > MAX_RTP_PAYLOAD) return;
+    if (sock_fd_ < 0 || nal_size == 0) return;
+    if (nal_size > MAX_RTP_PAYLOAD) {
+        SPDLOG_DEBUG("Rebroadcast: NAL too large for single packet ({} > {})", nal_size, MAX_RTP_PAYLOAD);
+        return;
+    }
 
     uint8_t packet[RTP_HEADER_SIZE + MAX_RTP_PAYLOAD];
     packet[0] = 0x80;
