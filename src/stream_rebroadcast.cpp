@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <time.h>
 #include <chrono>
+#include <fstream>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -146,29 +147,44 @@ std::string StreamRebroadcast::generate_sdp() {
     uint32_t addr = ntohl(inet_addr(host_));
     bool is_multicast = ((addr & 0xF0000000) == 0xE0000000);
 
-    char sdp[512];
-    if (is_multicast) {
-        snprintf(sdp, sizeof(sdp),
-            "v=0\r\n"
-            "o=- %u 1 IN IP4 %s\r\n"
-            "s=PixelPilot FPV Stream\r\n"
-            "c=IN IP4 %s/2\r\n"
-            "t=0 0\r\n"
-            "m=video %d RTP/AVP 96\r\n"
-            "a=rtpmap:96 %s/90000\r\n",
-            rtp_ssrc_, lip, host_, port_, codec_name);
-    } else {
-        snprintf(sdp, sizeof(sdp),
-            "v=0\r\n"
-            "o=- %u 1 IN IP4 %s\r\n"
-            "s=PixelPilot FPV Stream\r\n"
-            "c=IN IP4 %s\r\n"
-            "t=0 0\r\n"
-            "m=video %d RTP/AVP 96\r\n"
-            "a=rtpmap:96 %s/90000\r\n",
-            rtp_ssrc_, lip, host_, port_, codec_name);
+    const char *conn_fmt = is_multicast ? "c=IN IP4 %s/2\r\n" : "c=IN IP4 %s\r\n";
+
+    char sdp[1024];
+    int n = snprintf(sdp, sizeof(sdp),
+        "v=0\r\n"
+        "o=- %u 1 IN IP4 %s\r\n"
+        "s=PixelPilot FPV Stream\r\n",
+        rtp_ssrc_, lip);
+
+    n += snprintf(sdp + n, sizeof(sdp) - n, conn_fmt, host_);
+
+    n += snprintf(sdp + n, sizeof(sdp) - n,
+        "t=0 0\r\n"
+        "a=recvonly\r\n"
+        "a=type:broadcast\r\n"
+        "m=video %d RTP/AVP 96\r\n"
+        "a=rtpmap:96 %s/90000\r\n",
+        port_, codec_name);
+
+    if (codec_ == VideoCodec::H264) {
+        n += snprintf(sdp + n, sizeof(sdp) - n,
+            "a=fmtp:96 packetization-mode=1\r\n");
     }
+
     return std::string(sdp);
+}
+
+void StreamRebroadcast::write_sdp_file() {
+    const char *path = "/tmp/pixelpilot_rebroadcast.sdp";
+    std::ofstream f(path);
+    if (!f.is_open()) {
+        spdlog::warn("Rebroadcast: could not write SDP file to {}", path);
+        return;
+    }
+    f << sdp_;
+    f.close();
+    spdlog::info("Rebroadcast: SDP file written to {}", path);
+    spdlog::info("Rebroadcast: you can also open the stream with: vlc {}", path);
 }
 
 int StreamRebroadcast::open_sap_socket() {
@@ -245,6 +261,13 @@ void StreamRebroadcast::send_sap_announcement(bool deletion) {
 // for NALs larger than MAX_RTP_PAYLOAD.
 void StreamRebroadcast::send_rtp_packet(const uint8_t *data, size_t size) {
     if (sock_fd_ < 0 || size == 0) return;
+
+    // Compute timestamp at the start so every NAL in this frame shares
+    // the same value and the very first frame never has timestamp 0.
+    auto now = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+        now.time_since_epoch()).count();
+    rtp_timestamp_ = (uint32_t)((elapsed * 90) / 1000); // 90kHz clock
 
     // Find NAL units in the bytestream (separated by 00 00 00 01 or 00 00 01)
     size_t pos = 0;
@@ -411,12 +434,6 @@ void StreamRebroadcast::send_rtp_packet(const uint8_t *data, size_t size) {
             }
         }
     }
-
-    // Use wall-clock timing for RTP timestamps (90kHz clock)
-    auto now = std::chrono::steady_clock::now();
-    auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
-        now.time_since_epoch()).count();
-    rtp_timestamp_ = (uint32_t)((elapsed * 90) / 1000); // 90kHz clock
 }
 
 void StreamRebroadcast::loop() {
@@ -440,6 +457,7 @@ void StreamRebroadcast::loop() {
                     rebroadcast_enabled.store(1);
                     open_sap_socket();
                     sdp_ = generate_sdp();
+                    write_sdp_file();
                     send_sap_announcement(false);
                     last_sap_time_ = std::chrono::steady_clock::now();
                     osd_publish_bool_fact("rebroadcast.enabled", NULL, 0, true);
@@ -469,6 +487,7 @@ void StreamRebroadcast::loop() {
                         rebroadcast_enabled.store(1);
                         open_sap_socket();
                         sdp_ = generate_sdp();
+                        write_sdp_file();
                         send_sap_announcement(false);
                         last_sap_time_ = std::chrono::steady_clock::now();
                         osd_publish_bool_fact("rebroadcast.enabled", NULL, 0, true);

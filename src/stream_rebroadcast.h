@@ -56,6 +56,7 @@ private:
     void close_socket();
     void send_rtp_packet(const uint8_t *data, size_t size);
     std::string generate_sdp();
+    void write_sdp_file();
     int open_sap_socket();
     void close_sap_socket();
     void send_sap_announcement(bool deletion);
