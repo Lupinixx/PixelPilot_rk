@@ -155,20 +155,27 @@ std::string StreamRebroadcast::generate_sdp() {
         "o=- %u 1 IN IP4 %s\r\n"
         "s=PixelPilot FPV Stream\r\n",
         rtp_ssrc_, lip);
+    if (n < 0 || (size_t)n >= sizeof(sdp)) return std::string();
 
-    n += snprintf(sdp + n, sizeof(sdp) - n, conn_fmt, host_);
+    int r = snprintf(sdp + n, sizeof(sdp) - n, conn_fmt, host_);
+    if (r < 0 || (size_t)r >= sizeof(sdp) - n) return std::string();
+    n += r;
 
-    n += snprintf(sdp + n, sizeof(sdp) - n,
+    r = snprintf(sdp + n, sizeof(sdp) - n,
         "t=0 0\r\n"
         "a=recvonly\r\n"
         "a=type:broadcast\r\n"
         "m=video %d RTP/AVP 96\r\n"
         "a=rtpmap:96 %s/90000\r\n",
         port_, codec_name);
+    if (r < 0 || (size_t)r >= sizeof(sdp) - n) return std::string();
+    n += r;
 
     if (codec_ == VideoCodec::H264) {
-        n += snprintf(sdp + n, sizeof(sdp) - n,
+        r = snprintf(sdp + n, sizeof(sdp) - n,
             "a=fmtp:96 packetization-mode=1\r\n");
+        if (r < 0 || (size_t)r >= sizeof(sdp) - n) return std::string();
+        n += r;
     }
 
     return std::string(sdp);
@@ -183,6 +190,10 @@ void StreamRebroadcast::write_sdp_file() {
     }
     f << sdp_;
     f.close();
+    if (f.fail()) {
+        spdlog::warn("Rebroadcast: failed to write SDP content to {}", path);
+        return;
+    }
     spdlog::info("Rebroadcast: SDP file written to {}", path);
     spdlog::info("Rebroadcast: you can also open the stream with: vlc {}", path);
 }
