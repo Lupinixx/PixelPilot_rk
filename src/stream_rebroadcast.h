@@ -55,6 +55,7 @@ private:
     int open_socket();
     void close_socket();
     void send_rtp_packet(const uint8_t *data, size_t size);
+    void send_single_nal_rtp(const uint8_t *nal_data, size_t nal_size, bool marker);
     std::string generate_sdp();
     void write_sdp_file();
     int open_sap_socket();
@@ -82,6 +83,11 @@ private:
     uint32_t local_ip_;
     std::string sdp_;
     std::chrono::steady_clock::time_point last_sap_time_;
+
+    // Cached parameter sets for VLC decoder initialization
+    std::vector<uint8_t> cached_vps_;
+    std::vector<uint8_t> cached_sps_;
+    std::vector<uint8_t> cached_pps_;
 };
 #else
 typedef struct StreamRebroadcast StreamRebroadcast;

@@ -35,10 +35,10 @@ StreamRebroadcast::StreamRebroadcast(rebroadcast_params params) {
     sap_fd_ = -1;
     local_ip_ = 0;
     sap_msg_id_ = 0;
-    rtp_seq_ = 0;
-    rtp_timestamp_ = 0;
-    // Generate a random SSRC to avoid collisions with other streams
+    // Generate random initial values per RFC 3550
     srand(time(NULL) ^ getpid());
+    rtp_seq_ = (uint16_t)(rand() & 0xFFFF);
+    rtp_timestamp_ = 0;
     rtp_ssrc_ = (uint32_t)rand();
     running_ = false;
 }
@@ -163,8 +163,6 @@ std::string StreamRebroadcast::generate_sdp() {
 
     r = snprintf(sdp + n, sizeof(sdp) - n,
         "t=0 0\r\n"
-        "a=recvonly\r\n"
-        "a=type:broadcast\r\n"
         "m=video %d RTP/AVP 96\r\n"
         "a=rtpmap:96 %s/90000\r\n",
         port_, codec_name);
@@ -266,6 +264,33 @@ void StreamRebroadcast::send_sap_announcement(bool deletion) {
            (struct sockaddr *)&sap_addr_, sizeof(sap_addr_));
 }
 
+// Send a single (small) NAL unit as one RTP packet.
+void StreamRebroadcast::send_single_nal_rtp(const uint8_t *nal_data,
+                                            size_t nal_size, bool marker) {
+    if (sock_fd_ < 0 || nal_size == 0 || nal_size > MAX_RTP_PAYLOAD) return;
+
+    uint8_t packet[RTP_HEADER_SIZE + MAX_RTP_PAYLOAD];
+    packet[0] = 0x80;
+    packet[1] = 96 | (marker ? 0x80 : 0x00);
+    packet[2] = (rtp_seq_ >> 8) & 0xFF;
+    packet[3] = rtp_seq_ & 0xFF;
+    uint32_t ts = rtp_timestamp_;
+    packet[4] = (ts >> 24) & 0xFF;
+    packet[5] = (ts >> 16) & 0xFF;
+    packet[6] = (ts >> 8) & 0xFF;
+    packet[7] = ts & 0xFF;
+    packet[8] = (rtp_ssrc_ >> 24) & 0xFF;
+    packet[9] = (rtp_ssrc_ >> 16) & 0xFF;
+    packet[10] = (rtp_ssrc_ >> 8) & 0xFF;
+    packet[11] = rtp_ssrc_ & 0xFF;
+
+    memcpy(packet + RTP_HEADER_SIZE, nal_data, nal_size);
+    rtp_seq_++;
+
+    sendto(sock_fd_, packet, RTP_HEADER_SIZE + nal_size, 0,
+           (struct sockaddr *)&dest_addr_, sizeof(dest_addr_));
+}
+
 // Build and send an RTP packet with H264/H265 NAL unit payload.
 // For simplicity, we send the raw bytestream NALs directly as RTP payload.
 // This uses a simple single-NAL unit packetization approach with fragmentation
@@ -319,6 +344,38 @@ void StreamRebroadcast::send_rtp_packet(const uint8_t *data, size_t size) {
     // If no NAL units found, send as single packet
     if (nals.empty()) {
         nals.push_back({0, size});
+    }
+
+    // Detect and cache VPS/SPS/PPS parameter sets so we can prepend them
+    // to non-keyframe access units.  This lets VLC (and other players)
+    // initialise the decoder even when they join mid-stream.
+    bool has_param_sets = false;
+    for (size_t i = 0; i < nals.size(); i++) {
+        const uint8_t *nd = data + nals[i].first;
+        size_t ns = nals[i].second;
+        if (ns < 2) continue;
+
+        if (codec_ == VideoCodec::H265) {
+            uint8_t nt = (nd[0] >> 1) & 0x3F;
+            if (nt == 32) { cached_vps_.assign(nd, nd + ns); has_param_sets = true; }
+            else if (nt == 33) { cached_sps_.assign(nd, nd + ns); has_param_sets = true; }
+            else if (nt == 34) { cached_pps_.assign(nd, nd + ns); has_param_sets = true; }
+        } else {
+            uint8_t nt = nd[0] & 0x1F;
+            if (nt == 7) { cached_sps_.assign(nd, nd + ns); has_param_sets = true; }
+            else if (nt == 8) { cached_pps_.assign(nd, nd + ns); has_param_sets = true; }
+        }
+    }
+
+    // If this access unit lacks parameter sets, prepend the cached ones so
+    // that a player joining at this point can still decode.
+    if (!has_param_sets) {
+        if (codec_ == VideoCodec::H265 && !cached_vps_.empty())
+            send_single_nal_rtp(cached_vps_.data(), cached_vps_.size(), false);
+        if (!cached_sps_.empty())
+            send_single_nal_rtp(cached_sps_.data(), cached_sps_.size(), false);
+        if (!cached_pps_.empty())
+            send_single_nal_rtp(cached_pps_.data(), cached_pps_.size(), false);
     }
 
     for (size_t nal_idx = 0; nal_idx < nals.size(); nal_idx++) {
