@@ -745,6 +745,10 @@ void printHelp() {
     "\n"
     "    --rebroadcast-port <p> - Destination UDP port for rebroadcast        (Default: 5700)\n"
     "\n"
+    "    --rebroadcast-transcode - Transcode via Rockchip MPP hardware encoder (H.265 output)\n"
+    "\n"
+    "    --rebroadcast-bitrate <b> - Encoder bitrate in bps for transcode mode (Default: 4000000)\n"
+    "\n"
     "    --version              - Show program version\n"
     "\n", APP_VERSION_MAJOR, APP_VERSION_MINOR
   );
@@ -768,6 +772,8 @@ int main(int argc, char **argv)
 	bool rebroadcast_autostart = false;
 	const char *rebroadcast_host = "224.0.0.1";
 	int rebroadcast_port = 5700;
+	int rebroadcast_bitrate = 4000000;
+	bool rebroadcast_transcode = false;
 	uint16_t mode_width = 0;
 	uint16_t mode_height = 0;
 	uint32_t mode_vrefresh = 0;
@@ -969,6 +975,16 @@ int main(int argc, char **argv)
 
 	__OnArgument("--rebroadcast-port") {
 		rebroadcast_port = atoi(__ArgValue);
+		continue;
+	}
+
+	__OnArgument("--rebroadcast-transcode") {
+		rebroadcast_transcode = true;
+		continue;
+	}
+
+	__OnArgument("--rebroadcast-bitrate") {
+		rebroadcast_bitrate = atoi(__ArgValue);
 		continue;
 	}
 
@@ -1179,6 +1195,8 @@ int main(int argc, char **argv)
 		rb_args.host = rebroadcast_host;
 		rb_args.port = rebroadcast_port;
 		rb_args.codec = codec;
+		rb_args.bitrate = rebroadcast_bitrate;
+		rb_args.transcode = rebroadcast_transcode;
 		rebroadcaster = new StreamRebroadcast(rb_args);
 		ret = pthread_create(&tid_rebroadcast, NULL, &StreamRebroadcast::__THREAD__, rebroadcaster);
 		assert(!ret);

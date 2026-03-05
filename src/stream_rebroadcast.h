@@ -16,6 +16,9 @@
 #include <chrono>
 #include <netinet/in.h>
 
+#include <gst/gst.h>
+#include <gst/app/gstappsrc.h>
+
 #include "gstrtpreceiver.h"
 
 struct rebroadcast_rpc {
@@ -24,6 +27,7 @@ struct rebroadcast_rpc {
         RPC_START,
         RPC_STOP,
         RPC_TOGGLE,
+        RPC_SET_BITRATE,
         RPC_SHUTDOWN
     } command;
     std::shared_ptr<std::vector<uint8_t>> frame;
@@ -33,6 +37,8 @@ struct rebroadcast_params {
     const char *host = "224.0.0.1";
     int port = 5700;
     VideoCodec codec = VideoCodec::H265;
+    int bitrate = 4000000;  // 4 Mbps default for transcode mode
+    bool transcode = false;
 };
 
 extern std::atomic<int> rebroadcast_enabled;
@@ -46,16 +52,21 @@ public:
     void start();
     void stop();
     void toggle();
+    void set_bitrate(int bps);
     void shutdown();
 
     static void *__THREAD__(void *context);
 private:
     void enqueue(rebroadcast_rpc rpc);
     void loop();
-    int open_socket();
-    void close_socket();
-    void send_rtp_packet(const uint8_t *data, size_t size);
-    void send_single_nal_rtp(const uint8_t *nal_data, size_t nal_size, bool marker);
+
+    // GStreamer pipeline management
+    int build_pipeline();
+    void destroy_pipeline();
+    static GstBusSyncReply bus_sync_handler(GstBus *bus, GstMessage *msg, gpointer data);
+    static void on_caps_change(GstPad *pad, GParamSpec *pspec, gpointer data);
+
+    // SDP/SAP
     std::string generate_sdp();
     void write_sdp_file();
     int open_sap_socket();
@@ -68,13 +79,18 @@ private:
 
     const char *host_;
     int port_;
-    VideoCodec codec_;
-    int sock_fd_;
-    struct sockaddr_in dest_addr_;
-    uint16_t rtp_seq_;
-    uint32_t rtp_timestamp_;
-    uint32_t rtp_ssrc_;
+    VideoCodec codec_;       // Input codec
+    VideoCodec out_codec_;   // Output codec (H265 for transcode, same as input for passthrough)
+    int bitrate_;
+    bool transcode_;
     bool running_;
+    uint32_t session_id_;
+
+    // GStreamer elements
+    GstElement *pipeline_;
+    GstElement *appsrc_;
+    GstElement *payloader_;
+    GstElement *encoder_;
 
     // SAP announcement state
     int sap_fd_;
@@ -84,10 +100,12 @@ private:
     std::string sdp_;
     std::chrono::steady_clock::time_point last_sap_time_;
 
-    // Cached parameter sets for VLC decoder initialization
-    std::vector<uint8_t> cached_vps_;
-    std::vector<uint8_t> cached_sps_;
-    std::vector<uint8_t> cached_pps_;
+    // Codec parameters extracted from GStreamer payloader (for SDP)
+    std::mutex sprop_mtx_;
+    std::string sprop_vps_;
+    std::string sprop_sps_;
+    std::string sprop_pps_;
+    bool sprop_updated_;
 };
 #else
 typedef struct StreamRebroadcast StreamRebroadcast;
@@ -101,6 +119,7 @@ int rebroadcast_is_enabled(void);
 void rebroadcast_start(StreamRebroadcast* rb);
 void rebroadcast_stop(StreamRebroadcast* rb);
 void rebroadcast_toggle(StreamRebroadcast* rb);
+void rebroadcast_set_bitrate(StreamRebroadcast* rb, int bps);
 
 #ifdef __cplusplus
 }
