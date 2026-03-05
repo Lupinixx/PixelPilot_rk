@@ -199,10 +199,13 @@ int StreamRebroadcast::build_pipeline() {
 
     ss << "udpsink host=" << host_ << " port=" << port_;
 
-    uint32_t addr = ntohl(inet_addr(host_));
-    bool is_multicast = ((addr & 0xF0000000) == 0xE0000000);
-    if (is_multicast) {
-        ss << " auto-multicast=true ttl=2";
+    in_addr_t host_addr = inet_addr(host_);
+    if (host_addr != INADDR_NONE) {
+        uint32_t addr = ntohl(host_addr);
+        bool is_multicast = ((addr & 0xF0000000) == 0xE0000000);
+        if (is_multicast) {
+            ss << " auto-multicast=true ttl=2";
+        }
     }
     ss << " sync=false";
 
@@ -535,8 +538,8 @@ void StreamRebroadcast::loop() {
                 if (encoder_ && bitrate_ > 0) {
                     g_object_set(encoder_, "bps", bitrate_, NULL);
                     spdlog::info("Rebroadcast: bitrate set to {} bps", bitrate_);
+                    osd_publish_uint_fact("rebroadcast.bitrate", NULL, 0, bitrate_);
                 }
-                osd_publish_uint_fact("rebroadcast.bitrate", NULL, 0, bitrate_);
                 break;
             }
         case rebroadcast_rpc::RPC_FRAME:
