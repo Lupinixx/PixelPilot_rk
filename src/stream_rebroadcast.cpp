@@ -262,7 +262,7 @@ int StreamRebroadcast::build_pipeline() {
         "is-live",       TRUE,
         "do-timestamp",  TRUE,
         "format",        GST_FORMAT_TIME,
-        "stream-type",   0,  /* GST_APP_STREAM_TYPE_STREAM */
+        "stream-type",   GST_APP_STREAM_TYPE_STREAM,
         "block",         FALSE,
         "max-bytes",     (guint64)0,  /* unlimited queue */
         NULL);
@@ -585,8 +585,12 @@ void StreamRebroadcast::loop() {
                     spdlog::info("Rebroadcast: frame #{} size={} push={}",
                                  frame_count_, frame_data->size(), (int)ret);
                 }
-                if (ret != GST_FLOW_OK && ret != GST_FLOW_EOS) {
-                    SPDLOG_DEBUG("Rebroadcast: push_buffer returned {}", (int)ret);
+                if (ret != GST_FLOW_OK) {
+                    if (ret == GST_FLOW_EOS) {
+                        spdlog::warn("Rebroadcast: pipeline reached EOS on frame #{}", frame_count_);
+                    } else {
+                        SPDLOG_DEBUG("Rebroadcast: push_buffer returned {}", (int)ret);
+                    }
                 }
 
                 // Check for sprop update immediately (don't wait for SAP
