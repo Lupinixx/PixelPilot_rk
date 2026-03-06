@@ -36,7 +36,7 @@ static const size_t MAX_FRAME_QUEUE = 10;
 // For H.264: IDR slice (5)
 static bool frame_is_keyframe(const uint8_t* data, size_t size, VideoCodec codec) {
     if (!data || size < 5) return false;
-    for (size_t i = 0; i + 4 < size; ) {
+    for (size_t i = 0; i + 3 < size; ) {
         if (data[i] == 0x00 && data[i + 1] == 0x00) {
             size_t sc_len = 0;
             if (data[i + 2] == 0x01) {
