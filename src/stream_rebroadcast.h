@@ -85,6 +85,7 @@ private:
     bool transcode_;
     bool running_;
     uint32_t session_id_;
+    uint64_t frame_count_;
 
     // GStreamer elements
     GstElement *pipeline_;

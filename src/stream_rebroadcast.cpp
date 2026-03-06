@@ -40,6 +40,7 @@ StreamRebroadcast::StreamRebroadcast(rebroadcast_params params) {
     sap_msg_id_ = 0;
     sprop_updated_ = false;
     running_ = false;
+    frame_count_ = 0;
     srand(time(NULL) ^ getpid());
     session_id_ = (uint32_t)rand();
 }
@@ -109,7 +110,7 @@ void *StreamRebroadcast::__THREAD__(void *param) {
     return nullptr;
 }
 
-// GStreamer bus handler for error/warning logging
+// GStreamer bus handler for error/warning/state-change logging
 GstBusSyncReply StreamRebroadcast::bus_sync_handler(GstBus *bus, GstMessage *msg, gpointer data) {
     switch (GST_MESSAGE_TYPE(msg)) {
     case GST_MESSAGE_ERROR: {
@@ -128,6 +129,17 @@ GstBusSyncReply StreamRebroadcast::bus_sync_handler(GstBus *bus, GstMessage *msg
         spdlog::warn("Rebroadcast pipeline warning: {} ({})", err->message, dbg ? dbg : "");
         g_error_free(err);
         g_free(dbg);
+        break;
+    }
+    case GST_MESSAGE_STATE_CHANGED: {
+        if (GST_MESSAGE_SRC(msg) == GST_OBJECT(static_cast<StreamRebroadcast *>(data)->pipeline_)) {
+            GstState old_st, new_st, pending;
+            gst_message_parse_state_changed(msg, &old_st, &new_st, &pending);
+            spdlog::info("Rebroadcast pipeline state: {} -> {} (pending {})",
+                         gst_element_state_get_name(old_st),
+                         gst_element_state_get_name(new_st),
+                         gst_element_state_get_name(pending));
+        }
         break;
     }
     default:
@@ -179,15 +191,17 @@ int StreamRebroadcast::build_pipeline() {
     std::string caps_media = (codec_ == VideoCodec::H264) ? "h264" : "h265";
     std::string parser = (codec_ == VideoCodec::H264) ? "h264parse" : "h265parse";
 
+    // Build pipeline string.  appsrc properties are set programmatically
+    // below for reliability (enum values like format/stream-type).
     std::stringstream ss;
-    ss << "appsrc name=src is-live=true do-timestamp=true format=time ! ";
-    ss << parser << " ! ";
+    ss << "appsrc name=src ! ";
+    ss << parser << " config-interval=-1 ! ";
 
     if (transcode_) {
         // Transcode: decode with MPP hardware, re-encode as H.265
         ss << "mppvideodec ! ";
         ss << "mpph265enc name=enc ! ";
-        ss << "h265parse ! ";
+        ss << "h265parse config-interval=-1 ! ";
         ss << "rtph265pay config-interval=-1 pt=96 mtu=1400 name=pay ! ";
         out_codec_ = VideoCodec::H265;
     } else {
@@ -239,6 +253,20 @@ int StreamRebroadcast::build_pipeline() {
         return -1;
     }
 
+    // Configure appsrc for live streaming.
+    // block=FALSE is critical: without it push_buffer() blocks when the
+    // internal queue is full (default 200 KB).  That stalls the entire
+    // rebroadcast thread because h265parse cannot produce output until
+    // it sees VPS/SPS/PPS in a keyframe, so data backs up in the queue.
+    g_object_set(appsrc_,
+        "is-live",       TRUE,
+        "do-timestamp",  TRUE,
+        "format",        GST_FORMAT_TIME,
+        "stream-type",   0,  /* GST_APP_STREAM_TYPE_STREAM */
+        "block",         FALSE,
+        "max-bytes",     (guint64)0,  /* unlimited queue */
+        NULL);
+
     // Set input caps on appsrc
     GstCaps *src_caps = gst_caps_new_simple(
         (std::string("video/x-") + caps_media).c_str(),
@@ -280,6 +308,8 @@ int StreamRebroadcast::build_pipeline() {
         }
         return -1;
     }
+
+    frame_count_ = 0;
 
     spdlog::info("Rebroadcast: streaming to {}:{} ({}, {} -> {})",
                  host_, port_,
@@ -331,32 +361,30 @@ std::string StreamRebroadcast::generate_sdp() {
     if (r < 0 || (size_t)r >= sizeof(sdp) - n) return std::string();
     n += r;
 
-    // Add fmtp with sprop parameters from GStreamer payloader
+    // Add fmtp with sprop parameters from GStreamer payloader.
+    // Always emit an a=fmtp line; VLC may refuse to connect without one.
     {
         std::lock_guard<std::mutex> lock(sprop_mtx_);
         if (out_codec_ == VideoCodec::H265) {
-            if (!sprop_vps_.empty() || !sprop_sps_.empty() || !sprop_pps_.empty()) {
-                std::string fmtp = "a=fmtp:96";
-                bool first_param = true;
-                if (!sprop_vps_.empty()) {
-                    fmtp += (first_param ? " " : "; ");
-                    fmtp += "sprop-vps=" + sprop_vps_;
-                    first_param = false;
-                }
-                if (!sprop_sps_.empty()) {
-                    fmtp += (first_param ? " " : "; ");
-                    fmtp += "sprop-sps=" + sprop_sps_;
-                    first_param = false;
-                }
-                if (!sprop_pps_.empty()) {
-                    fmtp += (first_param ? " " : "; ");
-                    fmtp += "sprop-pps=" + sprop_pps_;
-                    first_param = false;
-                }
-                fmtp += "\r\n";
-                r = snprintf(sdp + n, sizeof(sdp) - n, "%s", fmtp.c_str());
-                if (r >= 0 && (size_t)r < sizeof(sdp) - n) n += r;
+            std::string fmtp = "a=fmtp:96";
+            bool has_params = false;
+            if (!sprop_vps_.empty()) {
+                fmtp += " sprop-vps=" + sprop_vps_;
+                has_params = true;
             }
+            if (!sprop_sps_.empty()) {
+                fmtp += std::string(has_params ? "; " : " ");
+                fmtp += "sprop-sps=" + sprop_sps_;
+                has_params = true;
+            }
+            if (!sprop_pps_.empty()) {
+                fmtp += std::string(has_params ? "; " : " ");
+                fmtp += "sprop-pps=" + sprop_pps_;
+                has_params = true;
+            }
+            fmtp += "\r\n";
+            r = snprintf(sdp + n, sizeof(sdp) - n, "%s", fmtp.c_str());
+            if (r >= 0 && (size_t)r < sizeof(sdp) - n) n += r;
         } else {
             std::string fmtp = "a=fmtp:96 packetization-mode=1";
             if (!sprop_sps_.empty() || !sprop_pps_.empty()) {
@@ -551,13 +579,20 @@ void StreamRebroadcast::loop() {
                 gst_buffer_fill(buf, 0, frame_data->data(), frame_data->size());
 
                 GstFlowReturn ret = gst_app_src_push_buffer(GST_APP_SRC(appsrc_), buf);
-                if (ret != GST_FLOW_OK) {
+
+                frame_count_++;
+                if (frame_count_ <= 5 || (frame_count_ % 300 == 0)) {
+                    spdlog::info("Rebroadcast: frame #{} size={} push={}",
+                                 frame_count_, frame_data->size(), (int)ret);
+                }
+                if (ret != GST_FLOW_OK && ret != GST_FLOW_EOS) {
                     SPDLOG_DEBUG("Rebroadcast: push_buffer returned {}", (int)ret);
                 }
 
-                // Periodically send SAP announcements and update SDP if needed
-                auto now = std::chrono::steady_clock::now();
-                if (std::chrono::duration_cast<std::chrono::seconds>(now - last_sap_time_).count() >= SAP_INTERVAL_SEC) {
+                // Check for sprop update immediately (don't wait for SAP
+                // interval) so VLC can init from the SDP as soon as
+                // the payloader provides codec parameters.
+                {
                     bool need_sdp_update = false;
                     {
                         std::lock_guard<std::mutex> slock(sprop_mtx_);
@@ -567,7 +602,15 @@ void StreamRebroadcast::loop() {
                     if (need_sdp_update) {
                         sdp_ = generate_sdp();
                         write_sdp_file();
+                        send_sap_announcement(false);
+                        last_sap_time_ = std::chrono::steady_clock::now();
+                        spdlog::info("Rebroadcast: SDP updated with codec parameters");
                     }
+                }
+
+                // Periodically send SAP announcements
+                auto now = std::chrono::steady_clock::now();
+                if (std::chrono::duration_cast<std::chrono::seconds>(now - last_sap_time_).count() >= SAP_INTERVAL_SEC) {
                     send_sap_announcement(false);
                     last_sap_time_ = now;
                 }
