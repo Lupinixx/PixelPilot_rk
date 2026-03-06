@@ -84,7 +84,8 @@ private:
     int bitrate_;
     bool transcode_;
     bool running_;
-    bool idr_seen_;          // Gate: only push frames after first keyframe
+    bool idr_seen_;          // Gate: only push frames after first keyframe (consumer thread only)
+    std::atomic<bool> discontinuity_;  // Set by producer when RPC queue drops frames
     uint32_t session_id_;
     uint64_t frame_count_;
 

@@ -79,6 +79,7 @@ StreamRebroadcast::StreamRebroadcast(rebroadcast_params params) {
     sprop_updated_ = false;
     running_ = false;
     idr_seen_ = false;
+    discontinuity_.store(false);
     frame_count_ = 0;
     srand(time(NULL) ^ getpid());
     session_id_ = (uint32_t)rand();
@@ -101,8 +102,13 @@ void StreamRebroadcast::frame(std::shared_ptr<std::vector<uint8_t>> frame) {
         // Drop oldest entries when the queue grows too deep.  Old frames
         // would arrive with compressed timestamps once processed, flooding
         // the receiver's jitter buffer and causing packet loss.
-        while (queue_.size() > MAX_FRAME_QUEUE) {
-            queue_.pop();
+        if (queue_.size() > MAX_FRAME_QUEUE) {
+            while (queue_.size() > MAX_FRAME_QUEUE) {
+                queue_.pop();
+            }
+            // Signal the consumer that frames were lost so it can
+            // re-synchronize on the next keyframe and set DISCONT.
+            discontinuity_.store(true, std::memory_order_relaxed);
         }
         queue_.push(rpc);
     }
@@ -249,7 +255,10 @@ int StreamRebroadcast::build_pipeline() {
     // otherwise cause a burst of RTP packets with compressed timestamps.
     std::stringstream ss;
     ss << "appsrc name=src ! ";
-    ss << "queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream ! ";
+    // Buffer between appsrc and parser.  30 buffers ≈ 1 second at 30 fps,
+    // which is large enough to absorb transient parser slowdowns without
+    // dropping data unnecessarily, while still capping memory usage.
+    ss << "queue max-size-buffers=30 max-size-time=0 max-size-bytes=0 leaky=downstream ! ";
     ss << parser << " config-interval=-1 ! ";
 
     if (transcode_) {
@@ -322,10 +331,13 @@ int StreamRebroadcast::build_pipeline() {
         "max-bytes",     (guint64)0,  /* unlimited queue */
         NULL);
 
-    // Set input caps on appsrc
+    // Set input caps on appsrc.  The receiver's h265parse outputs complete
+    // access units in byte-stream format; declaring alignment=au lets the
+    // downstream parser avoid unnecessary re-framing.
     GstCaps *src_caps = gst_caps_new_simple(
         (std::string("video/x-") + caps_media).c_str(),
         "stream-format", G_TYPE_STRING, "byte-stream",
+        "alignment",     G_TYPE_STRING, "au",
         NULL);
     g_object_set(appsrc_, "caps", src_caps, NULL);
     gst_caps_unref(src_caps);
@@ -632,13 +644,26 @@ void StreamRebroadcast::loop() {
 
                 auto frame_data = rpc.frame;
 
+                // If frames were dropped from the RPC queue, reset IDR
+                // gate so we wait for the next keyframe.  Pushing P/B
+                // frames after a gap produces "Could not find ref" /
+                // "PPS id out of range" errors on the receiver.
+                if (discontinuity_.exchange(false, std::memory_order_relaxed)) {
+                    if (idr_seen_) {
+                        idr_seen_ = false;
+                        spdlog::info("Rebroadcast: discontinuity detected, waiting for next keyframe");
+                    }
+                }
+
                 // Wait for a keyframe before starting to push data.
                 // Without VPS/SPS/PPS (which accompany keyframes), the
                 // receiving decoder cannot initialize and will produce
                 // "invalid NALU" / "Could not find ref" errors.
+                bool just_synced = false;
                 if (!idr_seen_) {
                     if (frame_is_keyframe(frame_data->data(), frame_data->size(), codec_)) {
                         idr_seen_ = true;
+                        just_synced = true;
                         spdlog::info("Rebroadcast: keyframe detected, starting stream");
                     } else {
                         break;
@@ -648,9 +673,10 @@ void StreamRebroadcast::loop() {
                 GstBuffer *buf = gst_buffer_new_allocate(NULL, frame_data->size(), NULL);
                 gst_buffer_fill(buf, 0, frame_data->data(), frame_data->size());
 
-                // Mark the first buffer as a discontinuity so downstream
-                // elements (parser, payloader) know to resynchronize.
-                if (frame_count_ == 0) {
+                // Mark the buffer as a discontinuity when we first sync
+                // (or re-sync after a drop) so downstream elements
+                // (parser, payloader) know to reset their state.
+                if (just_synced) {
                     GST_BUFFER_FLAG_SET(buf, GST_BUFFER_FLAG_DISCONT);
                 }
 
