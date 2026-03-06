@@ -31,6 +31,37 @@ static const int SAP_INTERVAL_SEC = 5;
 // that floods the remote receiver's jitter buffer.
 static const size_t MAX_FRAME_QUEUE = 10;
 
+// Check if byte-stream data contains a keyframe.
+// For H.265: IDR_W_RADL (19), IDR_N_LP (20), CRA_NUT (21), BLA types (16-18)
+// For H.264: IDR slice (5)
+static bool frame_is_keyframe(const uint8_t* data, size_t size, VideoCodec codec) {
+    if (!data || size < 5) return false;
+    for (size_t i = 0; i + 4 < size; ) {
+        if (data[i] == 0x00 && data[i + 1] == 0x00) {
+            size_t sc_len = 0;
+            if (data[i + 2] == 0x01) {
+                sc_len = 3;
+            } else if (data[i + 2] == 0x00 && i + 3 < size && data[i + 3] == 0x01) {
+                sc_len = 4;
+            }
+            if (sc_len > 0 && (i + sc_len) < size) {
+                uint8_t nal_byte = data[i + sc_len];
+                if (codec == VideoCodec::H265) {
+                    uint8_t nal_type = (nal_byte >> 1) & 0x3f;
+                    if (nal_type >= 16 && nal_type <= 21) return true;
+                } else if (codec == VideoCodec::H264) {
+                    uint8_t nal_type = nal_byte & 0x1f;
+                    if (nal_type == 5) return true;
+                }
+                i += sc_len + 1;
+                continue;
+            }
+        }
+        i++;
+    }
+    return false;
+}
+
 StreamRebroadcast::StreamRebroadcast(rebroadcast_params params) {
     host_ = params.host;
     port_ = params.port;
@@ -47,6 +78,7 @@ StreamRebroadcast::StreamRebroadcast(rebroadcast_params params) {
     sap_msg_id_ = 0;
     sprop_updated_ = false;
     running_ = false;
+    idr_seen_ = false;
     frame_count_ = 0;
     srand(time(NULL) ^ getpid());
     session_id_ = (uint32_t)rand();
@@ -333,6 +365,7 @@ int StreamRebroadcast::build_pipeline() {
     }
 
     frame_count_ = 0;
+    idr_seen_ = false;
 
     spdlog::info("Rebroadcast: streaming to {}:{} ({}, {} -> {})",
                  host_, port_,
@@ -598,8 +631,28 @@ void StreamRebroadcast::loop() {
                 if (!running_ || !appsrc_) break;
 
                 auto frame_data = rpc.frame;
+
+                // Wait for a keyframe before starting to push data.
+                // Without VPS/SPS/PPS (which accompany keyframes), the
+                // receiving decoder cannot initialize and will produce
+                // "invalid NALU" / "Could not find ref" errors.
+                if (!idr_seen_) {
+                    if (frame_is_keyframe(frame_data->data(), frame_data->size(), codec_)) {
+                        idr_seen_ = true;
+                        spdlog::info("Rebroadcast: keyframe detected, starting stream");
+                    } else {
+                        break;
+                    }
+                }
+
                 GstBuffer *buf = gst_buffer_new_allocate(NULL, frame_data->size(), NULL);
                 gst_buffer_fill(buf, 0, frame_data->data(), frame_data->size());
+
+                // Mark the first buffer as a discontinuity so downstream
+                // elements (parser, payloader) know to resynchronize.
+                if (frame_count_ == 0) {
+                    GST_BUFFER_FLAG_SET(buf, GST_BUFFER_FLAG_DISCONT);
+                }
 
                 GstFlowReturn ret = gst_app_src_push_buffer(GST_APP_SRC(appsrc_), buf);
 

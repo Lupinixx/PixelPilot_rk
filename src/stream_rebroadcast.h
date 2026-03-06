@@ -84,6 +84,7 @@ private:
     int bitrate_;
     bool transcode_;
     bool running_;
+    bool idr_seen_;          // Gate: only push frames after first keyframe
     uint32_t session_id_;
     uint64_t frame_count_;
 
