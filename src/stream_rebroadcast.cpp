@@ -24,6 +24,13 @@ std::atomic<int> rebroadcast_enabled{0};
 // SAP announcement interval in seconds
 static const int SAP_INTERVAL_SEC = 5;
 
+// Maximum number of frames allowed in the RPC queue.  When the queue exceeds
+// this depth, older FRAME entries are dropped.  This prevents unbounded queue
+// growth when the rebroadcast thread momentarily falls behind the receiver,
+// which would otherwise cause a burst of frames with compressed timestamps
+// that floods the remote receiver's jitter buffer.
+static const size_t MAX_FRAME_QUEUE = 10;
+
 StreamRebroadcast::StreamRebroadcast(rebroadcast_params params) {
     host_ = params.host;
     port_ = params.port;
@@ -57,7 +64,17 @@ void StreamRebroadcast::frame(std::shared_ptr<std::vector<uint8_t>> frame) {
         .command = rebroadcast_rpc::RPC_FRAME,
         .frame = frame
     };
-    enqueue(rpc);
+    {
+        std::lock_guard<std::mutex> lock(mtx_);
+        // Drop oldest entries when the queue grows too deep.  Old frames
+        // would arrive with compressed timestamps once processed, flooding
+        // the receiver's jitter buffer and causing packet loss.
+        while (queue_.size() >= MAX_FRAME_QUEUE) {
+            queue_.pop();
+        }
+        queue_.push(rpc);
+    }
+    cv_.notify_one();
 }
 
 void StreamRebroadcast::start() {
@@ -193,8 +210,14 @@ int StreamRebroadcast::build_pipeline() {
 
     // Build pipeline string.  appsrc properties are set programmatically
     // below for reliability (enum values like format/stream-type).
+    // A leaky queue sits between appsrc and the parser: when the pipeline
+    // can't consume data fast enough, old buffers are dropped (leaky=2
+    // means "downstream", i.e. oldest buffers are discarded first).
+    // This prevents stale data accumulation inside GStreamer that would
+    // otherwise cause a burst of RTP packets with compressed timestamps.
     std::stringstream ss;
     ss << "appsrc name=src ! ";
+    ss << "queue max-size-buffers=3 max-size-time=0 max-size-bytes=0 leaky=downstream ! ";
     ss << parser << " config-interval=-1 ! ";
 
     if (transcode_) {
