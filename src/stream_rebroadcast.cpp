@@ -69,7 +69,7 @@ void StreamRebroadcast::frame(std::shared_ptr<std::vector<uint8_t>> frame) {
         // Drop oldest entries when the queue grows too deep.  Old frames
         // would arrive with compressed timestamps once processed, flooding
         // the receiver's jitter buffer and causing packet loss.
-        while (queue_.size() >= MAX_FRAME_QUEUE) {
+        while (queue_.size() > MAX_FRAME_QUEUE) {
             queue_.pop();
         }
         queue_.push(rpc);
