@@ -6,9 +6,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <termios.h>
 #include <unistd.h>
 
 #include "lvgl/lvgl.h"
@@ -283,23 +285,63 @@ static void start_script_runner(const char *script_name)
 
     close_runner_ui();
 
-    int pipefd[2];
-    if (pipe(pipefd) != 0) {
+    /* Use a pseudoterminal so the child sees a tty on stdout/stderr.
+     * This causes shells and most programs to flush output line by line,
+     * giving continuous log output instead of large buffered chunks.
+     * Use the Linux-native /dev/ptmx approach to avoid needing posix_openpt()
+     * which may not be available on musl-based cross-compilers. */
+    int master_fd = open("/dev/ptmx", O_RDWR | O_NOCTTY);
+    if (master_fd < 0) {
         return;
+    }
+    /* Unlock the slave pty (equivalent to unlockpt()). */
+    {
+        int unlock = 0;
+        ioctl(master_fd, TIOCSPTLCK, &unlock);
+    }
+    /* Get the slave pty device number (equivalent to ptsname()). */
+    unsigned int ptnum = 0;
+    if (ioctl(master_fd, TIOCGPTN, &ptnum) != 0) {
+        close(master_fd);
+        return;
+    }
+    char slave_path[64];
+    snprintf(slave_path, sizeof(slave_path), "/dev/pts/%u", ptnum);
+
+    /* Disable echo and LF->CRLF translation so output reads as plain text. */
+    {
+        int slave_fd_temp = open(slave_path, O_RDWR | O_NOCTTY);
+        if (slave_fd_temp >= 0) {
+            struct termios tios;
+            if (tcgetattr(slave_fd_temp, &tios) == 0) {
+                tios.c_lflag &= ~(ECHO | ECHOE | ECHOK | ECHONL);
+                tios.c_oflag &= ~ONLCR;
+                tcsetattr(slave_fd_temp, TCSANOW, &tios);
+            }
+            close(slave_fd_temp);
+        }
     }
 
     pid_t pid = fork();
     if (pid < 0) {
-        close(pipefd[0]);
-        close(pipefd[1]);
+        close(master_fd);
         return;
     }
 
     if (pid == 0) {
-        close(pipefd[0]);
-        dup2(pipefd[1], STDOUT_FILENO);
-        dup2(pipefd[1], STDERR_FILENO);
-        close(pipefd[1]);
+        /* Become a new session leader so the pty becomes the controlling
+         * terminal, which forces line-buffered output from the child. */
+        setsid();
+        int slave_fd = open(slave_path, O_RDWR);
+        if (slave_fd < 0) {
+            _exit(127);
+        }
+        ioctl(slave_fd, TIOCSCTTY, 0);
+        dup2(slave_fd, STDIN_FILENO);
+        dup2(slave_fd, STDOUT_FILENO);
+        dup2(slave_fd, STDERR_FILENO);
+        close(slave_fd);
+        close(master_fd);
 
         if (chdir(SCRIPT_DIR) != 0) {
             perror("chdir");
@@ -311,14 +353,13 @@ static void start_script_runner(const char *script_name)
         _exit(127);
     }
 
-    close(pipefd[1]);
-    int flags = fcntl(pipefd[0], F_GETFL, 0);
+    int flags = fcntl(master_fd, F_GETFL, 0);
     if (flags >= 0) {
-        fcntl(pipefd[0], F_SETFL, flags | O_NONBLOCK);
+        fcntl(master_fd, F_SETFL, flags | O_NONBLOCK);
     }
 
     g_runner.pid = pid;
-    g_runner.fd = pipefd[0];
+    g_runner.fd = master_fd;
     g_runner.running = true;
 
     g_runner.msgbox = lv_msgbox_create(NULL);
@@ -490,7 +531,7 @@ static void build_script_list(void)
     lv_group_set_default(default_group);
 }
 
-static void scripts_page_load_callback(lv_obj_t *page)
+void gs_scripts_page_refresh(lv_obj_t *page)
 {
     (void)page;
     clear_script_names();
@@ -501,25 +542,13 @@ static void scripts_page_load_callback(lv_obj_t *page)
     build_script_list();
 }
 
-void create_gs_scripts_menu(lv_obj_t * parent)
+void gs_scripts_init_in_page(lv_obj_t *parent, menu_page_data_t *menu_page_data)
 {
-    menu_page_data_t* menu_page_data = malloc(sizeof(menu_page_data_t));
-    strcpy(menu_page_data->type, "gs");
-    strcpy(menu_page_data->page, "scripts");
-    menu_page_data->page_load_callback = scripts_page_load_callback;
-    menu_page_data->entry_count = 0;
-    menu_page_data->page_entries = NULL;
-    menu_page_data->indev_group = lv_group_create();
-    lv_group_set_default(menu_page_data->indev_group);
-    lv_obj_set_user_data(parent, menu_page_data);
-
     g_parent_page = parent;
     g_menu_page_data = menu_page_data;
 
-    create_text(parent, LV_SYMBOL_DIRECTORY, "Select a script to execute", NULL, NULL, false, LV_MENU_ITEM_BUILDER_VARIANT_1);
+    create_text(parent, LV_SYMBOL_DIRECTORY, "Custom Scripts", NULL, NULL, false, LV_MENU_ITEM_BUILDER_VARIANT_1);
     create_text(parent, NULL, "Scripts are loaded from " SCRIPT_DIR, NULL, NULL, false, LV_MENU_ITEM_BUILDER_VARIANT_1);
 
     build_script_list();
-
-    lv_group_set_default(default_group);
 }

@@ -33,7 +33,6 @@ extern lv_obj_t * gs_apfpv_cont;
 extern lv_obj_t * gs_system_cont;
 extern lv_obj_t * gs_wlan_cont;
 extern lv_obj_t * gs_actions_cont;
-extern lv_obj_t * gs_scripts_cont;
 extern lv_group_t *main_group;
 extern lv_group_t * error_group;
 extern lv_obj_t * size; // air camera size setting wfb-ng only
@@ -178,7 +177,6 @@ void generic_back_event_handler(lv_event_t * e) {
         lv_obj_remove_state(gs_system_cont, LV_STATE_CHECKED);
         lv_obj_remove_state(gs_wlan_cont, LV_STATE_CHECKED);
         lv_obj_remove_state(gs_actions_cont, LV_STATE_CHECKED);
-        lv_obj_remove_state(gs_scripts_cont, LV_STATE_CHECKED);
         lv_indev_set_group(indev_drv,main_group);
     }
 }

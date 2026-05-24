@@ -19,7 +19,6 @@
 #include "gs_system.h"
 #include "gs_wifi.h"
 #include "gs_actions.h"
-#include "gs_scripts.h"
 #include "styles.h"
 #include "gs_connection_checker.h"
 
@@ -56,7 +55,6 @@ lv_obj_t * sub_gs_system_dvr_page;
 lv_obj_t * sub_gs_system_page;
 lv_obj_t * sub_wlan_page;
 lv_obj_t * sub_gs_actions_page;
-lv_obj_t * sub_gs_scripts_page;
 
 lv_obj_t * air_wfbng_cont;
 lv_obj_t * air_alink_cont;
@@ -70,7 +68,6 @@ lv_obj_t * gs_apfpv_cont;
 lv_obj_t * gs_system_cont;
 lv_obj_t * gs_wlan_cont;
 lv_obj_t * gs_actions_cont;
-lv_obj_t * gs_scripts_cont;
 
 extern lv_obj_t * ap_fpv_channel;
 
@@ -416,11 +413,6 @@ lv_obj_t * pp_menu_create(lv_obj_t * screen)
     lv_menu_separator_create(sub_gs_actions_page);
     create_gs_actions_menu(sub_gs_actions_page);     
 
-    sub_gs_scripts_page = lv_menu_page_create(menu, LV_SYMBOL_DIRECTORY" Scripts");
-    lv_obj_set_style_pad_hor(sub_gs_scripts_page, lv_obj_get_style_pad_left(lv_menu_get_main_header(menu), 0), 0);
-    lv_menu_separator_create(sub_gs_scripts_page);
-    create_gs_scripts_menu(sub_gs_scripts_page);
-
     /*Create a root page*/
     root_page = lv_menu_page_create(menu, "Menu");
     lv_obj_set_style_pad_hor(root_page, lv_obj_get_style_pad_left(lv_menu_get_main_header(menu), 0), 0);
@@ -493,11 +485,6 @@ lv_obj_t * pp_menu_create(lv_obj_t * screen)
     lv_menu_set_load_page_event(menu, gs_actions_cont, sub_gs_actions_page); 
     lv_obj_add_event_cb(gs_actions_cont,back_event_handler,LV_EVENT_KEY,NULL);
 
-    gs_scripts_cont = create_text(section, LV_SYMBOL_DIRECTORY, "Scripts", NULL, NULL, false, LV_MENU_ITEM_BUILDER_VARIANT_1);
-    lv_group_add_obj(main_group,gs_scripts_cont);
-    lv_menu_set_load_page_event(menu, gs_scripts_cont, sub_gs_scripts_page);
-    lv_obj_add_event_cb(gs_scripts_cont,back_event_handler,LV_EVENT_KEY,NULL);
-
     lv_menu_set_sidebar_page(menu, root_page);
     lv_menu_set_page(menu,sub_gs_main_page);
     lv_menu_clear_history(menu);
@@ -531,7 +518,6 @@ static void back_event_handler(lv_event_t * e)
         lv_obj_remove_state(gs_system_cont, LV_STATE_CHECKED);
         lv_obj_remove_state(gs_wlan_cont, LV_STATE_CHECKED);
         lv_obj_remove_state(gs_actions_cont, LV_STATE_CHECKED);
-        lv_obj_remove_state(gs_scripts_cont, LV_STATE_CHECKED);
         lv_screen_load(pp_osd_screen);
         lv_indev_set_group(indev_drv,osd_group);
         menu_active = false;
