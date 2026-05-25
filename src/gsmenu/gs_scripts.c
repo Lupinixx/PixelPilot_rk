@@ -409,7 +409,7 @@ static void start_script_runner(const char *script_name)
     snprintf(header, sizeof(header), "Running %s/%s\n\n", SCRIPT_DIR, script_name);
     runner_append(header);
 
-    g_runner.timer = lv_timer_create(script_poll_timer_cb, 80, NULL);
+    g_runner.timer = lv_timer_create(script_poll_timer_cb, 10, NULL);
 }
 
 static void confirm_cancel_cb(lv_event_t *e)
