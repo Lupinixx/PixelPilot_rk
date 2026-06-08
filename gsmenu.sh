@@ -764,6 +764,24 @@ case "$@" in
             : #noop
         fi
         ;;
+    "get gs system dvr_also_start_drone_recording"*)
+        if grep -q '^dvr_also_start_drone_recording =' /config/setup.txt; then
+            grep '^dvr_also_start_drone_recording =' /config/setup.txt | awk '{print $3}'
+        else
+            echo 0
+        fi
+        ;;
+    "set gs system dvr_also_start_drone_recording"*)
+        value=0
+        if [ "$5" = "on" ]; then
+            value=1
+        fi
+        if grep -q '^dvr_also_start_drone_recording =' /config/setup.txt; then
+            sed -i "s/^dvr_also_start_drone_recording =.*/dvr_also_start_drone_recording = $value/" /config/setup.txt
+        else
+            echo "dvr_also_start_drone_recording = $value" >> /config/setup.txt
+        fi
+        ;;
     "get gs system dvr_mode"*)
         echo "raw"
         emit_values "raw\nreencode\nboth"
