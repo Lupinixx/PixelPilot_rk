@@ -35,10 +35,7 @@ extern lv_obj_t * gs_wlan_cont;
 extern lv_obj_t * gs_actions_cont;
 extern lv_group_t *main_group;
 extern lv_group_t * error_group;
-extern lv_obj_t * size; // air camera size setting wfb-ng only
-extern lv_obj_t * fps; // air camera fps setting wfb-ng only
 extern lv_obj_t * bitrate; // air camera bitrate setting wfb-ng only
-extern lv_obj_t * video_mode; // air camera video_mode setting apfpv only
 extern lv_obj_t * router;
 extern lv_obj_t * osd_fps;
 extern lv_obj_t * air_gs_rendering;
@@ -914,11 +911,8 @@ void gsmenu_toggle_rxmode() {
         lv_obj_add_flag(air_telemetry_msposd_section,LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(air_alink_cont, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(gs_wfbng_cont, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(size, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(fps, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(bitrate, LV_OBJ_FLAG_HIDDEN);
         lv_obj_remove_flag(gs_apfpv_cont, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_remove_flag(video_mode, LV_OBJ_FLAG_HIDDEN);
         lv_obj_remove_flag(air_aalink_cont, LV_OBJ_FLAG_HIDDEN);
         setenv("REMOTE_IP" , "192.168.0.1", 1);
         setenv("AIR_FIRMWARE_TYPE" , "apfpv", 1);
@@ -932,11 +926,8 @@ void gsmenu_toggle_rxmode() {
         lv_obj_remove_flag(air_telemetry_msposd_section,LV_OBJ_FLAG_HIDDEN);
         lv_obj_remove_flag(air_alink_cont, LV_OBJ_FLAG_HIDDEN);
         lv_obj_remove_flag(gs_wfbng_cont, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_remove_flag(size, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_remove_flag(fps, LV_OBJ_FLAG_HIDDEN);
         lv_obj_remove_flag(bitrate, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(gs_apfpv_cont, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(video_mode, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(air_aalink_cont, LV_OBJ_FLAG_HIDDEN);
         setenv("REMOTE_IP" , "10.5.0.10", 1);
         setenv("AIR_FIRMWARE_TYPE" , "wfb", 1);

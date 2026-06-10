@@ -18,8 +18,6 @@ lv_obj_t * hue;
 lv_obj_t * saturation;
 lv_obj_t * luminace;
 lv_obj_t * video_mode;
-lv_obj_t * size;
-lv_obj_t * fps;
 lv_obj_t * bitrate;
 lv_obj_t * video_codec;
 lv_obj_t * gopsize;
@@ -33,19 +31,6 @@ lv_obj_t * sensor_file;
 lv_obj_t * fpv_enable;
 lv_obj_t * noiselevel;
 
-
-extern lv_obj_t * rec_fps;
-void air_rec_fps_cb(lv_event_t *e) {
-    char val[100] = "";
-
-    lv_obj_t *ta = lv_event_get_target(e);
-    lv_dropdown_get_selected_str(ta, val, sizeof(val) - 1);
-
-    lv_obj_t *obj = lv_obj_get_child_by_type(rec_fps, 0, &lv_dropdown_class);
-    int index = lv_dropdown_get_option_index(obj,val);
-    lv_dropdown_set_selected(obj, index);
-    lv_obj_send_event(obj,LV_EVENT_VALUE_CHANGED,NULL);
-}
 
 // Back handler for camera sub-pages: go up to Camera landing page rather than
 // all the way to the main menu.
@@ -94,14 +79,8 @@ void create_air_camera_video_menu(lv_obj_t * parent) {
     cont = lv_menu_cont_create(section);
     lv_obj_set_flex_flow(cont, LV_FLEX_FLOW_COLUMN);
 
-    size = create_dropdown(cont, LV_SYMBOL_SETTINGS, "Size", "", "size", menu_page_data, false);
-    use_sub_back_handler(size);
-    video_mode = create_dropdown(cont, LV_SYMBOL_SETTINGS, "Video Mode", "", "video_mode", menu_page_data, false);
+    video_mode = create_dropdown(cont, LV_SYMBOL_SETTINGS, "Mode", "", "mode", menu_page_data, false);
     use_sub_back_handler(video_mode);
-    fps = create_dropdown(cont, LV_SYMBOL_SETTINGS, "FPS", "", "fps", menu_page_data, false);
-    // change rec fps when changing camera fps
-    lv_obj_add_event_cb(lv_obj_get_child_by_type(fps, 0, &lv_dropdown_class), air_rec_fps_cb, LV_EVENT_VALUE_CHANGED, fps);
-    use_sub_back_handler(fps);
     bitrate = create_dropdown(cont, LV_SYMBOL_SETTINGS, "Bitrate", "", "bitrate", menu_page_data, false);
     use_sub_back_handler(bitrate);
     video_codec = create_dropdown(cont, LV_SYMBOL_SETTINGS, "Codec", "", "codec", menu_page_data, false);
@@ -111,9 +90,7 @@ void create_air_camera_video_menu(lv_obj_t * parent) {
     rc_mode = create_dropdown(cont, LV_SYMBOL_SETTINGS, "RC Mode", "", "rc_mode", menu_page_data, false);
     use_sub_back_handler(rc_mode);
 
-    add_entry_to_menu_page(menu_page_data, "Loading size ...",        size,       reload_dropdown_value);
-    add_entry_to_menu_page(menu_page_data, "Loading video_mode ...",  video_mode, reload_dropdown_value);
-    add_entry_to_menu_page(menu_page_data, "Loading fps ...",         fps,        reload_dropdown_value);
+    add_entry_to_menu_page(menu_page_data, "Loading mode ...",        video_mode, reload_dropdown_value);
     add_entry_to_menu_page(menu_page_data, "Loading bitrate ...",     bitrate,    reload_dropdown_value);
     add_entry_to_menu_page(menu_page_data, "Loading video_codec ...", video_codec, reload_dropdown_value);
     add_entry_to_menu_page(menu_page_data, "Loading gopsize ...",     gopsize,    reload_slider_value);

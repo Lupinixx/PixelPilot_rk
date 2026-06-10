@@ -22,6 +22,8 @@ TXPROFILES_CONF="/etc/txprofiles.conf"
 
 SSH="timeout -k 1 11 sshpass -p $SSH_PASS ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o ControlMaster=auto -o ControlPath=/run/ssh_control:%h:%p:%r -o ControlPersist=15s -o ServerAliveInterval=3 -o ServerAliveCountMax=2 root@$REMOTE_IP"
 SCP="timeout -k 1 11 sshpass -p $SSH_PASS scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o ControlMaster=auto -o ControlPath=/run/ssh_control:%h:%p:%r -o ControlPersist=15s -o ServerAliveInterval=3 -o ServerAliveCountMax=2"
+API_CURL="curl -fsS --max-time 2"
+API_BASE_URL="http://${REMOTE_IP}/api/v1"
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Helper functions
@@ -35,6 +37,81 @@ mkdir -p "$CACHE_DIR"
 #   emit_values_cmd <command> [args]   – dynamic values from a command
 emit_values()     { printf '\x1e'"$1"; }
 emit_values_cmd() { printf '\x1e'; "$@"; }
+
+waybeam_api_get() {
+    local endpoint="$1"
+    $API_CURL "${API_BASE_URL}/${endpoint}" 2>/dev/null
+}
+
+waybeam_mode_options() {
+    local modes_json
+    modes_json="$(waybeam_api_get "modes")" || return 1
+
+    printf '%s' "$modes_json" | jq -r '
+        if (.ok != true) or (.data == null) then empty else
+        .data as $d
+        | [($d.pads[]? | select(.pad == $d.selected_pad) | .modes[]?
+            | ((.index|tostring) + ": " + (.desc // ((.width|tostring) + "x" + (.height|tostring) + "@" + (.max_fps|tostring) + "fps"))))] as $modes
+        | (
+            if $d.selected_mode == -1 then
+                "-1: Auto (highest)"
+            else
+                (($modes[]? | select(startswith(($d.selected_mode|tostring) + ":")))
+                 // (($d.selected_mode|tostring) + ": selected"))
+            end
+          ) as $selected
+        | ([$selected] + ["-1: Auto (highest)"] + $modes)
+        | reduce .[] as $item ([];
+            if ($item == null or $item == "") then .
+            elif index($item) then .
+            else . + [$item]
+            end)
+        | .[]
+        end
+    '
+}
+
+waybeam_mode_index_from_label() {
+    printf '%s' "$1" | sed -n 's/^\([-0-9]\+\):.*/\1/p'
+}
+
+waybeam_set_config() {
+    local key="$1"
+    local value="$2"
+    waybeam_api_get "set?${key}=${value}" >/dev/null 2>&1
+}
+
+waybeam_record_active() {
+    waybeam_api_get "record/status" | grep -q '"active":[[:space:]]*true'
+}
+
+waybeam_record_start() {
+    waybeam_api_get "record/start" >/dev/null 2>&1
+}
+
+waybeam_record_stop() {
+    waybeam_api_get "record/stop" >/dev/null 2>&1
+}
+
+# Retry up to 3 times, checking /record/status after each attempt.
+# Runs the retries in a background subshell so the caller is not blocked.
+waybeam_record_set_with_retry_bg() {
+    local want="$1"
+    (
+        local i
+        for i in 1 2 3; do
+            if [ "$want" = "on" ]; then
+                waybeam_record_start
+                sleep 1
+                waybeam_record_active && break
+            else
+                waybeam_record_stop
+                sleep 1
+                waybeam_record_active || break
+            fi
+        done
+    ) &
+}
 
 # Refresh cached config files from the air unit (10s TTL)
 refresh_cache() {
@@ -240,17 +317,16 @@ case "$@" in
         get_majestic_value '.image.luminance'
         emit_values "0 100"
         ;;
-    "get air camera size")
-        get_majestic_value '.video0.size'
-        emit_values "1280x720\n1456x816\n1920x1080\n1440x1080\n1920x1440\n2104x1184\n2208x1248\n2240x1264\n2312x1304\n2436x1828\n2512x1416\n2560x1440\n2560x1920\n2720x1528\n2944x1656\n3200x1800\n3840x2160"
-        ;;
-    "get air camera video_mode")
-        echo get_current_video_mode | nc -w 11 $REMOTE_IP 12355
-        emit_values "16:9 720p 30\n\n16:9 720p 30 50HzAC\n16:9 1080p 30\n16:9 1080p 30 50HzAC\n16:9 1440p 30\n16:9 1440p 30 50HzAC\n16:9 4k 2160p 30\n16:9 4k 2160p 30 50HzAC\n16:9 540p 60\n16:9 540p 60 50HzAC\n16:9 720p 60\n16:9 720p 60 50HzAC\n16:9 1080p 60\n16:9 1080p 60 50HzAC\n16:9 1440p 60\n16:9 1440p 60 50HzAC\n16:9 1688p 60\n16:9 1688p 60 50HzAC\n16:9 540p 90\n16:9 540p 90 50HzAC\n16:9 720p 90\n16:9 720p 90 50HzAC\n16:9 1080p 90\n16:9 1080p 90 50HzAC\n16:9 540p 120\n16:9 720p 120\n16:9 816p 120\n4:3 720p 30\n4:3 720p 30 50HzAC\n4:3 960p 30\n4:3 960p 30 50HzAC\n4:3 1080p 30\n4:3 1080p 30 50HzAC\n4:3 1440p 30\n4:3 1440p 30 50HzAC\n4:3 2160p 30\n4:3 2160p 30 50HzAC\n4:3 720p 60\n4:3 720p 60 50HzAC\n4:3 960p 60\n4:3 960p 60 50HzAC\n4:3 1080p 60\n4:3 1080p 60 50HzAC\n4:3 1440p 60\n4:3 1440p 60 50HzAC\n4:3 1688p 60\n4:3 1688p 60 50HzAC\n4:3 720p 90\n4:3 720p 90 50HzAC\n4:3 960p 90\n4:3 960p 90 50HzAC\n4:3 1080p 90\n4:3 1080p 90 50HzAC\n4:3 540p 120\n4:3 720p 120\n4:3 816p 120"
-        ;;
-    "get air camera fps")
-        get_majestic_value '.video0.fps'
-        emit_values "60\n90\n120"
+    "get air camera mode")
+        mode_options="$(waybeam_mode_options)"
+        if [ -n "$mode_options" ]; then
+            current_mode="$(printf '%s\n' "$mode_options" | head -n1)"
+            echo "$current_mode"
+            emit_values "$mode_options"
+        else
+            echo "-1: Auto (highest)"
+            emit_values "-1: Auto (highest)"
+        fi
         ;;
     "get air camera bitrate")
         get_majestic_value '.video0.bitrate'
@@ -269,7 +345,11 @@ case "$@" in
         emit_values "vbr\navbr\ncbr"
         ;;
     "get air camera rec_enable")
-        [ "$(get_majestic_value '.records.enabled')" = "true" ] && echo 1 || echo 0
+        if waybeam_record_active; then
+            echo 1
+        else
+            echo 0
+        fi
         ;;
     "get air camera rec_split")
         get_majestic_value '.records.split'
@@ -325,14 +405,10 @@ case "$@" in
     "set air camera luminace"*)
         $SSH "cli -s .image.luminance $5 && killall -1 majestic"
         ;;
-    "set air camera size"*)
-        $SSH "cli -s .video0.size $5 && killall -1 majestic"
-        ;;
-    "set air camera video_mode"*)
-        echo set_simple_video_mode "$5" | nc -w 11 $REMOTE_IP 12355
-        ;;
-    "set air camera fps"*)
-        $SSH "cli -s .video0.fps $5 && killall -1 majestic"
+    "set air camera mode"*)
+        mode_index="$(waybeam_mode_index_from_label "$5")"
+        [ -n "$mode_index" ] || mode_index="$5"
+        waybeam_set_config "sensor.mode" "$mode_index"
         ;;
     "set air camera bitrate"*)
         $SSH "cli -s .video0.bitrate $5 && killall -1 majestic"
@@ -347,11 +423,7 @@ case "$@" in
         $SSH "cli -s .video0.rcMode $5 && killall -1 majestic"
         ;;
     "set air camera rec_enable"*)
-        if [ "$5" = "on" ]; then
-            $SSH 'cli -s .records.enable true && killall -1 majestic'
-        else
-            $SSH 'cli -s .records.enable false && killall -1 majestic'
-        fi
+        waybeam_record_set_with_retry_bg "$5"
         ;;
     "set air camera rec_split"*)
         $SSH "cli -s .records.split $5 && killall -1 majestic"
@@ -781,6 +853,13 @@ case "$@" in
         else
             echo "dvr_also_start_drone_recording = $value" >> /config/setup.txt
         fi
+        ;;
+    "set gs system drone_recording"*)
+        # Called from the drone-follow pthread in gs_system.c.
+        # REMOTE_IP is already set in the environment by setenv() in gsmenu_toggle_rxmode().
+        # API_BASE_URL is derived from REMOTE_IP at startup, so waybeam helpers reach the
+        # correct drone IP without any extra routing needed here.
+        waybeam_record_set_with_retry_bg "$5"
         ;;
     "get gs system dvr_mode"*)
         echo "raw"

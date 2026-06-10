@@ -116,45 +116,6 @@ static void reload_rec_enabled_fn(lv_obj_t *page, lv_obj_t *parameter) {
     lv_unlock();
 }
 
-typedef struct {
-    bool start;
-} drone_record_req_t;
-
-static void *drone_record_thread_fn(void *arg) {
-    drone_record_req_t *req = (drone_record_req_t *)arg;
-    const char *action = req->start ? "start" : "stop";
-    const char *drone_ip = (RXMODE == APFPV) ? "192.168.0.10" : "10.5.0.10";
-    char cmd[512];
-
-    // Fire-and-forget request so UI recording toggle is not blocked by network I/O.
-    snprintf(cmd, sizeof(cmd),
-             "curl -fsS --max-time 2 \"http://%s/api/v1/record/%s\" >/dev/null",
-             drone_ip, action);
-
-    (void)system(cmd);
-    free(req);
-    return NULL;
-}
-
-static void trigger_drone_recording(bool start) {
-    drone_record_req_t *req = malloc(sizeof(*req));
-    if (!req) return;
-    req->start = start;
-
-    pthread_t tid;
-    if (pthread_create(&tid, NULL, drone_record_thread_fn, req) == 0) {
-        pthread_detach(tid);
-    } else {
-        free(req);
-    }
-}
-
-static bool is_drone_record_follow_enabled(void) {
-    if (!rec_also_start_drone) return false;
-    lv_obj_t *sw = lv_obj_get_child_by_type(rec_also_start_drone, 0, &lv_switch_class);
-    return sw && lv_obj_has_state(sw, LV_STATE_CHECKED);
-}
-
 static void reload_dvr_reenc_osd_fn(lv_obj_t *page, lv_obj_t *parameter) {
     lv_obj_t *sw = lv_obj_get_child_by_type(parameter, 0, &lv_switch_class);
     lv_lock();
@@ -236,6 +197,41 @@ void rec_enabled_cb(lv_event_t *e) {
     }
 }
 
+typedef struct {
+    bool start;
+} drone_record_req_t;
+
+static void *drone_record_thread_fn(void *arg) {
+    drone_record_req_t *req = (drone_record_req_t *)arg;
+
+    const char *state = req->start ? "on" : "off";
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd),
+             "gsmenu.sh set gs system drone_recording %s >/dev/null 2>&1",
+             state);
+    (void)system(cmd);
+    free(req);
+    return NULL;
+}
+
+static void trigger_drone_recording(bool start) {
+    drone_record_req_t *req = malloc(sizeof(*req));
+    if (!req) return;
+    req->start = start;
+
+    pthread_t tid;
+    if (pthread_create(&tid, NULL, drone_record_thread_fn, req) == 0) {
+        pthread_detach(tid);
+    } else {
+        free(req);
+    }
+}
+
+static bool is_drone_record_follow_enabled(void) {
+    if (!rec_also_start_drone) return false;
+    lv_obj_t *sw = lv_obj_get_child_by_type(rec_also_start_drone, 0, &lv_switch_class);
+    return sw && lv_obj_has_state(sw, LV_STATE_CHECKED);
+}
 
 void gs_live_colortrans_cb(lv_event_t *e) {
     lv_event_code_t event = lv_event_get_code(e);
