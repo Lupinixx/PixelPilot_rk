@@ -35,7 +35,7 @@ extern lv_obj_t * gs_wlan_cont;
 extern lv_obj_t * gs_actions_cont;
 extern lv_group_t *main_group;
 extern lv_group_t * error_group;
-extern lv_obj_t * bitrate; // air camera bitrate setting wfb-ng only
+extern lv_obj_t * bitrate;
 extern lv_obj_t * router;
 extern lv_obj_t * osd_fps;
 extern lv_obj_t * air_gs_rendering;
@@ -749,7 +749,11 @@ void reload_switch_value(lv_obj_t * page,lv_obj_t * parameter) {
         thread_data_t * param_user_data = (thread_data_t*) lv_obj_get_user_data(obj);
         bool value = atoi(get_paramater(page,param_user_data->parameter));
         lv_lock();
+        // Remove the callback before setting state so the programmatic update
+        // does not re-trigger generic_switch_event_cb and fire another set command.
+        lv_obj_remove_event_cb(obj, generic_switch_event_cb);
         lv_obj_set_state(obj,LV_STATE_CHECKED,value);
+        lv_obj_add_event_cb(obj, generic_switch_event_cb, LV_EVENT_VALUE_CHANGED, param_user_data);
         lv_unlock();
     }
 }
@@ -911,7 +915,6 @@ void gsmenu_toggle_rxmode() {
         lv_obj_add_flag(air_telemetry_msposd_section,LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(air_alink_cont, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(gs_wfbng_cont, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(bitrate, LV_OBJ_FLAG_HIDDEN);
         lv_obj_remove_flag(gs_apfpv_cont, LV_OBJ_FLAG_HIDDEN);
         lv_obj_remove_flag(air_aalink_cont, LV_OBJ_FLAG_HIDDEN);
         setenv("REMOTE_IP" , "192.168.0.1", 1);
@@ -926,7 +929,6 @@ void gsmenu_toggle_rxmode() {
         lv_obj_remove_flag(air_telemetry_msposd_section,LV_OBJ_FLAG_HIDDEN);
         lv_obj_remove_flag(air_alink_cont, LV_OBJ_FLAG_HIDDEN);
         lv_obj_remove_flag(gs_wfbng_cont, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_remove_flag(bitrate, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(gs_apfpv_cont, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(air_aalink_cont, LV_OBJ_FLAG_HIDDEN);
         setenv("REMOTE_IP" , "10.5.0.10", 1);

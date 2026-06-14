@@ -14,9 +14,11 @@ extern lv_obj_t * sub_air_camera_page;
 lv_obj_t * mirror;
 lv_obj_t * flip;
 lv_obj_t * contrast;
-lv_obj_t * hue;
+lv_obj_t * brightness;
 lv_obj_t * saturation;
-lv_obj_t * luminace;
+lv_obj_t * lightness;
+lv_obj_t * sharpness;
+lv_obj_t * hsv;
 lv_obj_t * video_mode;
 lv_obj_t * bitrate;
 lv_obj_t * video_codec;
@@ -84,6 +86,7 @@ void create_air_camera_video_menu(lv_obj_t * parent) {
     bitrate = create_dropdown(cont, LV_SYMBOL_SETTINGS, "Bitrate", "", "bitrate", menu_page_data, false);
     use_sub_back_handler(bitrate);
     video_codec = create_dropdown(cont, LV_SYMBOL_SETTINGS, "Codec", "", "codec", menu_page_data, false);
+    lv_obj_add_flag(video_codec, LV_OBJ_FLAG_HIDDEN);
     use_sub_back_handler(video_codec);
     gopsize = create_slider(cont, LV_SYMBOL_SETTINGS, "Gopsize", "gopsize", menu_page_data, false, 0);
     use_sub_back_handler(gopsize);
@@ -115,21 +118,27 @@ void create_air_camera_image_menu(lv_obj_t * parent) {
     use_sub_back_handler(mirror);
     flip = create_switch(cont, LV_SYMBOL_SETTINGS, "Flip", "flip", menu_page_data, false);
     use_sub_back_handler(flip);
+    lightness = create_slider(cont, LV_SYMBOL_SETTINGS, "Lightness", "lightness", menu_page_data, false, 0);
+    use_sub_back_handler(lightness);
     contrast = create_slider(cont, LV_SYMBOL_SETTINGS, "Contrast", "contrast", menu_page_data, false, 0);
     use_sub_back_handler(contrast);
-    hue = create_slider(cont, LV_SYMBOL_SETTINGS, "Hue", "hue", menu_page_data, false, 0);
-    use_sub_back_handler(hue);
+    brightness = create_slider(cont, LV_SYMBOL_SETTINGS, "Brightness", "brightness", menu_page_data, false, 0);
+    use_sub_back_handler(brightness);
     saturation = create_slider(cont, LV_SYMBOL_SETTINGS, "Saturation", "saturation", menu_page_data, false, 0);
     use_sub_back_handler(saturation);
-    luminace = create_slider(cont, LV_SYMBOL_SETTINGS, "Luminance", "luminace", menu_page_data, false, 0);
-    use_sub_back_handler(luminace);
+    sharpness = create_slider(cont, LV_SYMBOL_SETTINGS, "Sharpness", "sharpness", menu_page_data, false, 0);
+    use_sub_back_handler(sharpness);
+    hsv = create_slider(cont, LV_SYMBOL_SETTINGS, "HSV", "hsv", menu_page_data, false, 0);
+    use_sub_back_handler(hsv);
 
     add_entry_to_menu_page(menu_page_data, "Loading mirror ...",     mirror,     reload_switch_value);
     add_entry_to_menu_page(menu_page_data, "Loading flip ...",       flip,       reload_switch_value);
+    add_entry_to_menu_page(menu_page_data, "Loading lightness ...",  lightness,  reload_slider_value);
     add_entry_to_menu_page(menu_page_data, "Loading contrast ...",   contrast,   reload_slider_value);
-    add_entry_to_menu_page(menu_page_data, "Loading hue ...",        hue,        reload_slider_value);
+    add_entry_to_menu_page(menu_page_data, "Loading brightness ...", brightness, reload_slider_value);
     add_entry_to_menu_page(menu_page_data, "Loading saturation ...", saturation, reload_slider_value);
-    add_entry_to_menu_page(menu_page_data, "Loading luminace ...",   luminace,   reload_slider_value);
+    add_entry_to_menu_page(menu_page_data, "Loading sharpness ...",  sharpness,  reload_slider_value);
+    add_entry_to_menu_page(menu_page_data, "Loading hsv ...",        hsv,        reload_slider_value);
 
     lv_group_set_default(default_group);
 }
@@ -173,6 +182,7 @@ void create_air_camera_isp_menu(lv_obj_t * parent) {
     lv_obj_set_flex_flow(cont, LV_FLEX_FLOW_COLUMN);
 
     exposure = create_slider(cont, LV_SYMBOL_SETTINGS, "Exposure", "exposure", menu_page_data, false, 0);
+    lv_obj_add_flag(exposure, LV_OBJ_FLAG_HIDDEN);
     use_sub_back_handler(exposure);
     antiflicker = create_dropdown(cont, LV_SYMBOL_SETTINGS, "Antiflicker", "", "antiflicker", menu_page_data, false);
     use_sub_back_handler(antiflicker);

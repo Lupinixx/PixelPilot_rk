@@ -172,6 +172,9 @@ void toggle_rec_enabled()
     lv_obj_send_event(rec_switch, LV_EVENT_VALUE_CHANGED, NULL);
 }
 
+static void trigger_drone_recording(bool start);
+static bool is_drone_record_follow_enabled(void);
+
 void rec_enabled_cb(lv_event_t *e) {
     lv_event_code_t event = lv_event_get_code(e);
     if (event == LV_EVENT_VALUE_CHANGED) {

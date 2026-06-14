@@ -78,7 +78,10 @@ waybeam_mode_index_from_label() {
 waybeam_set_config() {
     local key="$1"
     local value="$2"
-    waybeam_api_get "set?${key}=${value}" >/dev/null 2>&1
+    if ! waybeam_api_get "set?${key}=${value}" >/dev/null; then
+        echo "Waybeam: failed to set ${key}=${value} (no response from drone)" >&2
+        return 1
+    fi
 }
 
 waybeam_record_active() {
@@ -111,6 +114,41 @@ waybeam_record_set_with_retry_bg() {
             fi
         done
     ) &
+}
+
+waybeam_get_config() {
+    local key="$1"
+    local result
+    result="$(waybeam_api_get "get?${key}" | jq -r '.data.value // empty')"
+    if [ -z "$result" ]; then
+        echo "Waybeam: no response for config key '${key}'" >&2
+    fi
+    echo "$result"
+}
+
+waybeam_restart() {
+    # Encoder reinit can briefly drop the connection; use longer timeout and
+    # suppress failures (HTTP errors during reinit are expected, not real errors).
+    curl -sS --max-time 5 "${API_BASE_URL}/restart" >/dev/null 2>&1 || true
+}
+
+waybeam_get_iq() {
+    local param="$1"
+    local result
+    result="$(waybeam_api_get "iq" | jq -r --arg p "$param" '.data[] | select(.param==$p) | .value // empty' 2>/dev/null)"
+    if [ -z "$result" ]; then
+        echo "Waybeam: no response for IQ param '${param}'" >&2
+    fi
+    echo "$result"
+}
+
+waybeam_set_iq() {
+    local param="$1"
+    local value="$2"
+    if ! waybeam_api_get "iq/set?param=${param}&value=${value}" >/dev/null; then
+        echo "Waybeam: failed to set IQ ${param}=${value} (no response from drone)" >&2
+        return 1
+    fi
 }
 
 # Refresh cached config files from the air unit (10s TTL)
@@ -287,35 +325,45 @@ case "$@" in
         ;;
     "set air wfbng adaptivelink"*)
         if [ "$5" = "on" ]; then
-            $SSH 'sed -i "/alink_drone &/d" /etc/rc.local && sed -i -e "\$i alink_drone &" /etc/rc.local && cli -s .video0.qpDelta -12 && killall -1 majestic && (nohup alink_drone >/dev/null 2>&1 &)'
+            $SSH 'sed -i "/alink_drone &/d" /etc/rc.local && sed -i -e "\$i alink_drone &" /etc/rc.local && (nohup alink_drone >/dev/null 2>&1 &)'
+            waybeam_set_config "video0.qpDelta" "-12"
         else
-            $SSH 'killall -q -9 alink_drone;  sed -i "/alink_drone &/d" /etc/rc.local  ; cli -d .video0.qpDelta && killall -1 majestic'
+            $SSH 'killall -q -9 alink_drone; sed -i "/alink_drone &/d" /etc/rc.local'
+            waybeam_set_config "video0.qpDelta" "0"
         fi
         ;;
 
 # ── Air: Camera ──────────────────────────────────────────────────────────────
 
     "get air camera mirror")
-        [ "$(get_majestic_value '.image.mirror')" = "true" ] && echo 1 || echo 0
+        [ "$(waybeam_get_config 'image.mirror')" = "true" ] && echo 1 || echo 0
         ;;
     "get air camera flip")
-        [ "$(get_majestic_value '.image.flip')" = "true" ] && echo 1 || echo 0
+        [ "$(waybeam_get_config 'image.flip')" = "true" ] && echo 1 || echo 0
         ;;
     "get air camera contrast")
-        get_majestic_value '.image.contrast'
-        emit_values "0 100"
+        waybeam_get_iq 'contrast'
+        emit_values "0 255"
         ;;
-    "get air camera hue")
-        get_majestic_value '.image.hue'
-        emit_values "0 100"
+    "get air camera brightness")
+        waybeam_get_iq 'brightness'
+        emit_values "0 255"
         ;;
     "get air camera saturation")
-        get_majestic_value '.image.saturation'
-        emit_values "0 100"
+        waybeam_get_iq 'saturation'
+        emit_values "0 255"
         ;;
-    "get air camera luminace")
-        get_majestic_value '.image.luminance'
-        emit_values "0 100"
+    "get air camera lightness")
+        waybeam_get_iq 'lightness'
+        emit_values "0 255"
+        ;;
+    "get air camera sharpness")
+        waybeam_get_iq 'sharpness'
+        emit_values "0 255"
+        ;;
+    "get air camera hsv")
+        waybeam_get_iq 'hsv'
+        emit_values "0 255"
         ;;
     "get air camera mode")
         mode_options="$(waybeam_mode_options)"
@@ -329,7 +377,7 @@ case "$@" in
         fi
         ;;
     "get air camera bitrate")
-        get_majestic_value '.video0.bitrate'
+        waybeam_get_config 'video0.bitrate'
         emit_values "1024\n2048\n3072\n4096\n5120\n6144\n7168\n8192\n9216\n10240\n11264\n12288\n13312\n14336\n15360\n16384\n17408\n18432\n19456\n20480\n21504\n22528\n23552\n24576\n25600\n26624\n27648\n28672\n29692\n30720"
         ;;
     "get air camera codec")
@@ -337,12 +385,12 @@ case "$@" in
         emit_values "h264\nh265"
         ;;
     "get air camera gopsize")
-        get_majestic_value '.video0.gopSize'
+        waybeam_get_config 'video0.gopSize'
         emit_values "0 10"
         ;;
     "get air camera rc_mode")
-        get_majestic_value '.video0.rcMode'
-        emit_values "vbr\navbr\ncbr"
+        waybeam_get_config 'video0.rcMode'
+        emit_values "vbr\navbr\ncbr\nqvbr"
         ;;
     "get air camera rec_enable")
         if waybeam_record_active; then
@@ -352,58 +400,66 @@ case "$@" in
         fi
         ;;
     "get air camera rec_split")
-        get_majestic_value '.records.split'
-        emit_values "0 60"
+        waybeam_get_config 'record.maxSeconds'
+        emit_values "0 300"
         ;;
     "get air camera rec_maxusage")
-        get_majestic_value '.records.maxUsage'
-        emit_values "0 100"
+        waybeam_get_config 'record.maxMB'
+        emit_values "0 10000"
         ;;
     "get air camera exposure")
         get_majestic_value '.isp.exposure'
         emit_values "5 50"
         ;;
     "get air camera antiflicker")
-        get_majestic_value '.isp.antiFlicker'
+        waybeam_get_iq 'ae_flicker'
         emit_values "disabled\n50\n60"
         ;;
     "get air camera sensor_file")
-        basename -s .bin $(basename $(get_majestic_value '.isp.sensorConfig'))
-        emit_values "imx307\nimx335\nimx335_fpv\nimx415_fpv\nimx415_fpv\nimx415_milos10\nimx415_milos15\nimx335_milos12tweak\nimx335_greg15\nimx335_spike5\ngregspike05"
+        waybeam_get_config 'isp.sensorBin'
+        emit_values "imx307\nimx335\nimx335_fpv\nimx415_fpv\nimx415_milos10\nimx415_milos15\nimx335_milos12tweak\nimx335_greg15\nimx335_spike5\ngregspike05"
         ;;
     "get air camera fpv_enable")
-        get_majestic_value '.fpv.enabled' | grep -q true && echo 1 || echo 0
+        [ "$(waybeam_get_config 'fpv.roiEnabled')" = "true" ] && echo 1 || echo 0
         ;;
     "get air camera noiselevel")
-        get_majestic_value '.fpv.noiseLevel'
-        emit_values "0 1"
+        waybeam_get_config 'fpv.noiseLevel'
+        emit_values "0 7"
         ;;
 
     "set air camera mirror"*)
         if [ "$5" = "on" ]; then
-            $SSH 'cli -s .image.mirror true && killall -1 majestic'
+            waybeam_set_config "image.mirror" "true"
         else
-            $SSH 'cli -s .image.mirror false && killall -1 majestic'
+            waybeam_set_config "image.mirror" "false"
         fi
+        waybeam_restart
         ;;
     "set air camera flip"*)
         if [ "$5" = "on" ]; then
-            $SSH 'cli -s .image.flip true && killall -1 majestic'
+            waybeam_set_config "image.flip" "true"
         else
-            $SSH 'cli -s .image.flip false && killall -1 majestic'
+            waybeam_set_config "image.flip" "false"
         fi
+        waybeam_restart
         ;;
     "set air camera contrast"*)
-        $SSH "cli -s .image.contrast $5 && killall -1 majestic"
+        waybeam_set_iq "contrast" "$5"
         ;;
-    "set air camera hue"*)
-        $SSH "cli -s .image.hue $5 && killall -1 majestic"
+    "set air camera brightness"*)
+        waybeam_set_iq "brightness" "$5"
         ;;
     "set air camera saturation"*)
-        $SSH "cli -s .image.saturation $5 && killall -1 majestic"
+        waybeam_set_iq "saturation" "$5"
         ;;
-    "set air camera luminace"*)
-        $SSH "cli -s .image.luminance $5 && killall -1 majestic"
+    "set air camera lightness"*)
+        waybeam_set_iq "lightness" "$5"
+        ;;
+    "set air camera sharpness"*)
+        waybeam_set_iq "sharpness" "$5"
+        ;;
+    "set air camera hsv"*)
+        waybeam_set_iq "hsv" "$5"
         ;;
     "set air camera mode"*)
         mode_index="$(waybeam_mode_index_from_label "$5")"
@@ -411,44 +467,49 @@ case "$@" in
         waybeam_set_config "sensor.mode" "$mode_index"
         ;;
     "set air camera bitrate"*)
-        $SSH "cli -s .video0.bitrate $5 && killall -1 majestic"
+        waybeam_set_config "video0.bitrate" "$5"
         ;;
     "set air camera codec"*)
         $SSH "cli -s .video0.codec $5 && killall -1 majestic"
         ;;
     "set air camera gopsize"*)
-        $SSH "cli -s .video0.gopSize $5 && killall -1 majestic"
+        waybeam_set_config "video0.gopSize" "$5"
         ;;
     "set air camera rc_mode"*)
-        $SSH "cli -s .video0.rcMode $5 && killall -1 majestic"
+        waybeam_set_config "video0.rcMode" "$5"
+        waybeam_restart
         ;;
     "set air camera rec_enable"*)
         waybeam_record_set_with_retry_bg "$5"
         ;;
     "set air camera rec_split"*)
-        $SSH "cli -s .records.split $5 && killall -1 majestic"
+        waybeam_set_config "record.maxSeconds" "$5"
+        waybeam_restart
         ;;
     "set air camera rec_maxusage"*)
-        $SSH "cli -s .records.maxUsage $5 && killall -1 majestic"
+        waybeam_set_config "record.maxMB" "$5"
+        waybeam_restart
         ;;
     "set air camera exposure"*)
         $SSH "cli -s .isp.exposure $5 && killall -1 majestic"
         ;;
     "set air camera antiflicker"*)
-        $SSH "cli -s .isp.antiFlicker $5 && killall -1 majestic"
+        waybeam_set_iq "ae_flicker" "$5"
         ;;
     "set air camera sensor_file"*)
-        $SSH "cli -s .isp.sensorConfig /etc/sensors/${5}.bin && killall -1 majestic"
+        waybeam_set_config "isp.sensorBin" "$5"
+        waybeam_restart
         ;;
     "set air camera fpv_enable"*)
         if [ "$5" = "on" ]; then
-            $SSH 'cli -s .fpv.enabled true && killall -1 majestic'
+            waybeam_set_config "fpv.roiEnabled" "true"
         else
-            $SSH 'cli -s .fpv.enabled false && killall -1 majestic'
+            waybeam_set_config "fpv.roiEnabled" "false"
         fi
         ;;
     "set air camera noiselevel"*)
-        $SSH "cli -s .fpv.noiseLevel $5 && killall -1 majestic"
+        waybeam_set_config "fpv.noiseLevel" "$5"
+        waybeam_restart
         ;;
 
 # ── Air: Telemetry ───────────────────────────────────────────────────────────
