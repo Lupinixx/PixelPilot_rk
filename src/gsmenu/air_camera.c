@@ -181,8 +181,7 @@ void create_air_camera_isp_menu(lv_obj_t * parent) {
     cont = lv_menu_cont_create(section);
     lv_obj_set_flex_flow(cont, LV_FLEX_FLOW_COLUMN);
 
-    exposure = create_slider(cont, LV_SYMBOL_SETTINGS, "Exposure", "exposure", menu_page_data, false, 0);
-    lv_obj_add_flag(exposure, LV_OBJ_FLAG_HIDDEN);
+    exposure = create_slider(cont, LV_SYMBOL_SETTINGS, "EV Compensation", "exposure", menu_page_data, false, 0);
     use_sub_back_handler(exposure);
     antiflicker = create_dropdown(cont, LV_SYMBOL_SETTINGS, "Antiflicker", "", "antiflicker", menu_page_data, false);
     use_sub_back_handler(antiflicker);

@@ -402,9 +402,8 @@ case "$@" in
         emit_values "0 10000"
         ;;
     "get air camera exposure")
-        # Exposure control is hidden in UI; pending waybeam IQ AE investigation
-        echo ""
-        emit_values "5 50"
+        waybeam_get_iq 'ae_ev_comp'
+        emit_values "-4 4"
         ;;
     "get air camera antiflicker")
         waybeam_get_iq 'ae_flicker'
@@ -486,7 +485,7 @@ case "$@" in
         waybeam_restart
         ;;
     "set air camera exposure"*)
-        # Exposure control is hidden in UI; pending waybeam IQ AE investigation
+        waybeam_set_iq "ae_ev_comp" "$5"
         ;;
     "set air camera antiflicker"*)
         waybeam_set_iq "ae_flicker" "$5"
