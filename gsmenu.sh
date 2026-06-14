@@ -10,7 +10,6 @@ AIR_FIRMWARE_TYPE="${AIR_FIRMWARE_TYPE:-wfb}"
 SSH_PASS="12345"
 CACHE_DIR="/tmp/gsmenu_cache"
 CACHE_TTL=10 # seconds
-MAJESTIC_YAML="/etc/majestic.yaml"
 WFB_YAML="/etc/wfb.yaml"
 ALINK_CONF="/etc/alink.conf"
 AALINK_CONF="/etc/aalink.conf"
@@ -157,14 +156,9 @@ refresh_cache() {
     local last_refresh=$((current_time - CACHE_TTL))
 
     if [[ ! -f "$CACHE_DIR/last_refresh" ]] || [[ $(cat "$CACHE_DIR/last_refresh") -lt $last_refresh ]]; then
-        $SCP root@$REMOTE_IP:$MAJESTIC_YAML root@$REMOTE_IP:$WFB_YAML root@$REMOTE_IP:$ALINK_CONF root@$REMOTE_IP:$TXPROFILES_CONF root@$REMOTE_IP:$AALINK_CONF $CACHE_DIR 2>/dev/null
+        $SCP root@$REMOTE_IP:$WFB_YAML root@$REMOTE_IP:$ALINK_CONF root@$REMOTE_IP:$TXPROFILES_CONF root@$REMOTE_IP:$AALINK_CONF $CACHE_DIR 2>/dev/null
         echo "$current_time" > "$CACHE_DIR/last_refresh"
     fi
-}
-
-get_majestic_value() {
-    local key="$1"
-    yaml-cli -i "$CACHE_DIR/majestic.yaml" -g "$key" 2>/dev/null
 }
 
 get_wfb_value() {
@@ -381,7 +375,7 @@ case "$@" in
         emit_values "1024\n2048\n3072\n4096\n5120\n6144\n7168\n8192\n9216\n10240\n11264\n12288\n13312\n14336\n15360\n16384\n17408\n18432\n19456\n20480\n21504\n22528\n23552\n24576\n25600\n26624\n27648\n28672\n29692\n30720"
         ;;
     "get air camera codec")
-        get_majestic_value '.video0.codec'
+        echo "h265"
         emit_values "h264\nh265"
         ;;
     "get air camera gopsize")
@@ -408,7 +402,8 @@ case "$@" in
         emit_values "0 10000"
         ;;
     "get air camera exposure")
-        get_majestic_value '.isp.exposure'
+        # Exposure control is hidden in UI; pending waybeam IQ AE investigation
+        echo ""
         emit_values "5 50"
         ;;
     "get air camera antiflicker")
@@ -470,7 +465,7 @@ case "$@" in
         waybeam_set_config "video0.bitrate" "$5"
         ;;
     "set air camera codec"*)
-        $SSH "cli -s .video0.codec $5 && killall -1 majestic"
+        # Codec selection not supported by Waybeam (H.265-only on star6e); no-op
         ;;
     "set air camera gopsize"*)
         waybeam_set_config "video0.gopSize" "$5"
@@ -491,7 +486,7 @@ case "$@" in
         waybeam_restart
         ;;
     "set air camera exposure"*)
-        $SSH "cli -s .isp.exposure $5 && killall -1 majestic"
+        # Exposure control is hidden in UI; pending waybeam IQ AE investigation
         ;;
     "set air camera antiflicker"*)
         waybeam_set_iq "ae_flicker" "$5"
