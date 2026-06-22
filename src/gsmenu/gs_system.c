@@ -2,7 +2,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include <pthread.h>
 #include "../main.h"
 #ifndef USE_SIMULATOR
 #include "../drm.h"
@@ -34,7 +33,6 @@ lv_obj_t * rec_enabled;
 static lv_obj_t * dvr_mode_dd;
 static lv_obj_t * dvr_max_size;
 lv_obj_t * rec_fps;
-static lv_obj_t * rec_also_start_drone;
 static lv_obj_t * dvr_reenc_codec;
 static lv_obj_t * dvr_reenc_fps;
 static lv_obj_t * dvr_reenc_bitrate;
@@ -172,68 +170,24 @@ void toggle_rec_enabled()
     lv_obj_send_event(rec_switch, LV_EVENT_VALUE_CHANGED, NULL);
 }
 
-static void trigger_drone_recording(bool start);
-static bool is_drone_record_follow_enabled(void);
-
 void rec_enabled_cb(lv_event_t *e) {
     lv_event_code_t event = lv_event_get_code(e);
     if (event == LV_EVENT_VALUE_CHANGED) {
         lv_obj_t *ta = lv_event_get_target(e);
-        bool follow_drone = is_drone_record_follow_enabled();
         if (lv_obj_has_state(ta, LV_STATE_CHECKED)) {
 #ifndef USE_SIMULATOR
             dvr_start_all();
-            if (follow_drone) trigger_drone_recording(true);
 #else
             printf("dvr_start_all();\n");
-            if (follow_drone) printf("GET http://{drone_ip}/api/v1/record/start\n");
 #endif
         } else {
 #ifndef USE_SIMULATOR
             dvr_stop_all();
-            if (follow_drone) trigger_drone_recording(false);
 #else
             printf("dvr_stop_all();\n");
-            if (follow_drone) printf("GET http://{drone_ip}/api/v1/record/stop\n");
 #endif
         }
     }
-}
-
-typedef struct {
-    bool start;
-} drone_record_req_t;
-
-static void *drone_record_thread_fn(void *arg) {
-    drone_record_req_t *req = (drone_record_req_t *)arg;
-
-    const char *state = req->start ? "on" : "off";
-    char cmd[256];
-    snprintf(cmd, sizeof(cmd),
-             "gsmenu.sh set gs system drone_recording %s >/dev/null 2>&1",
-             state);
-    (void)system(cmd);
-    free(req);
-    return NULL;
-}
-
-static void trigger_drone_recording(bool start) {
-    drone_record_req_t *req = malloc(sizeof(*req));
-    if (!req) return;
-    req->start = start;
-
-    pthread_t tid;
-    if (pthread_create(&tid, NULL, drone_record_thread_fn, req) == 0) {
-        pthread_detach(tid);
-    } else {
-        free(req);
-    }
-}
-
-static bool is_drone_record_follow_enabled(void) {
-    if (!rec_also_start_drone) return false;
-    lv_obj_t *sw = lv_obj_get_child_by_type(rec_also_start_drone, 0, &lv_switch_class);
-    return sw && lv_obj_has_state(sw, LV_STATE_CHECKED);
 }
 
 void gs_live_colortrans_cb(lv_event_t *e) {
@@ -567,9 +521,6 @@ void create_gs_system_dvr_menu(lv_obj_t * parent) {
     lv_obj_add_event_cb(lv_obj_get_child_by_type(rec_enabled, 0, &lv_switch_class), rec_enabled_cb, LV_EVENT_VALUE_CHANGED, NULL);
     use_sub_back_handler(rec_enabled);
 
-    rec_also_start_drone = create_switch(cont, LV_SYMBOL_SETTINGS, "Also start drone recording", "dvr_also_start_drone_recording", menu_page_data, false);
-    use_sub_back_handler(rec_also_start_drone);
-
     dvr_mode_dd = create_dropdown(cont, LV_SYMBOL_SETTINGS, "Mode", "", "dvr_mode", menu_page_data, false);
     lv_obj_add_event_cb(lv_obj_get_child_by_type(dvr_mode_dd, 0, &lv_dropdown_class), dvr_mode_cb, LV_EVENT_VALUE_CHANGED, NULL);
     use_sub_back_handler(dvr_mode_dd);
@@ -602,7 +553,6 @@ void create_gs_system_dvr_menu(lv_obj_t * parent) {
     // dvr_mode_fn must be last: it calls update_dvr_mode_visibility() after all
     // DVR widgets have been loaded so none are skipped due to hidden state.
     add_entry_to_menu_page(menu_page_data, "Loading DVR enabled ...",    rec_enabled,          reload_rec_enabled_fn);
-    add_entry_to_menu_page(menu_page_data, "Loading Drone DVR follow ...", rec_also_start_drone, reload_switch_value);
     add_entry_to_menu_page(menu_page_data, "Loading DVR max size ...",   dvr_max_size,         reload_dvr_max_size_fn);
     add_entry_to_menu_page(menu_page_data, "Loading Raw FPS ...",        rec_fps,              reload_dropdown_value);
     add_entry_to_menu_page(menu_page_data, "Loading Re-enc Codec ...",   dvr_reenc_codec,      reload_dropdown_value);
